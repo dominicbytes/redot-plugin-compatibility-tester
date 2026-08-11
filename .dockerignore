@@ -1,0 +1,9 @@
+*
+!docker/
+!docker/Dockerfile.worker
+!docker/requirements.lock
+!harness/
+!harness/**
+!src/
+!src/**
+!LICENSE

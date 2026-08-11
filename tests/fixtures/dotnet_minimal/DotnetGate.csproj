@@ -1,0 +1,7 @@
+<Project Sdk="Redot.NET.Sdk/26.2.0">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>

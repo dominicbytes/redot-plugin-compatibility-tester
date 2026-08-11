@@ -1,0 +1,14 @@
+schema_version = 1
+plugin_id = "example"
+phases = ["import", "editor", "runtime"]
+timeout_seconds = 120
+
+[[probes]]
+type = "class_exists"
+value = "Node"
+expected = true
+
+[[probes]]
+type = "resource_exists"
+value = "res://addons/example/plugin.gd"
+expected = true

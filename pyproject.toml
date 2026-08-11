@@ -1,0 +1,119 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "redot-plugin-compatibility-tester"
+version = "0.1.0"
+description = "Offline-first, evidence-driven compatibility screening for Redot plugins."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "DominicBytes" }]
+keywords = ["redot", "godot", "plugin", "compatibility", "gdextension"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = [
+  "httpx>=0.28,<1",
+  "packaging>=24,<27",
+  "platformdirs>=4.3,<5",
+  "psutil>=6,<8",
+  "pydantic>=2.10,<3",
+  "typer>=0.15,<1",
+]
+
+[project.optional-dependencies]
+pretty = ["rich>=13.9,<15"]
+
+[project.scripts]
+redot-compat = "redot_compat.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/dominicbytes/redot-plugin-compatibility-tester"
+Repository = "https://github.com/dominicbytes/redot-plugin-compatibility-tester"
+Issues = "https://github.com/dominicbytes/redot-plugin-compatibility-tester/issues"
+
+[dependency-groups]
+dev = [
+  "build>=1.2,<2",
+  "jsonschema>=4.23,<5",
+  "mypy>=1.14,<2",
+  "pip-audit>=2.8,<3",
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+  "pytest-httpx>=0.35,<1",
+  "ruff>=0.9,<1",
+  "types-psutil>=7,<8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/redot_compat"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"harness" = "redot_compat/harness"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/harness",
+  "/schemas",
+  "/tests",
+  "/docs",
+  "/examples",
+  "/scripts",
+  "/docker",
+  "/.github",
+  "/*.md",
+  "/LICENSE",
+  "/pyproject.toml",
+  "/uv.lock",
+]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers --basetemp=.pytest-tmp"
+testpaths = ["tests"]
+markers = [
+  "integration: requires a configured local engine or container runtime",
+  "gauntlet: adversarial acceptance gate",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["redot_compat"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+packages = ["redot_compat"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "C4", "UP", "RUF", "S", "T20", "ASYNC"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/redot_compat/models/enums.py" = ["S105"]
+"tests/**" = ["S106", "S603", "S607"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -1,0 +1,372 @@
+{
+  "$defs": {
+    "BaselineDecision": {
+      "enum": [
+        "skip",
+        "test_required",
+        "forced_test",
+        "unknown"
+      ],
+      "title": "BaselineDecision",
+      "type": "string"
+    },
+    "Confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "NativeLibrary": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Architecture"
+        },
+        "build": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Build"
+        },
+        "entry_symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entry Symbol"
+        },
+        "exists": {
+          "title": "Exists",
+          "type": "boolean"
+        },
+        "features": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Features",
+          "type": "array"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "platform": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Platform"
+        },
+        "precision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Precision"
+        },
+        "selector": {
+          "title": "Selector",
+          "type": "string"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-fA-F0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        }
+      },
+      "required": [
+        "selector",
+        "path",
+        "exists"
+      ],
+      "title": "NativeLibrary",
+      "type": "object"
+    },
+    "PackageKind": {
+      "enum": [
+        "gdscript",
+        "gdextension_prebuilt",
+        "cpp_source",
+        "rust_source",
+        "dotnet",
+        "engine_module",
+        "project",
+        "mixed",
+        "unknown"
+      ],
+      "title": "PackageKind",
+      "type": "string"
+    },
+    "VersionEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "meaning": {
+          "$ref": "#/$defs/VersionMeaning"
+        },
+        "normalized_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized Version"
+        },
+        "notes": {
+          "default": "",
+          "title": "Notes",
+          "type": "string"
+        },
+        "package_applicability": {
+          "items": {
+            "$ref": "#/$defs/PackageKind"
+          },
+          "title": "Package Applicability",
+          "type": "array"
+        },
+        "raw_value": {
+          "title": "Raw Value",
+          "type": "string"
+        },
+        "source_path_or_url": {
+          "title": "Source Path Or Url",
+          "type": "string"
+        },
+        "source_type": {
+          "title": "Source Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_type",
+        "source_path_or_url",
+        "raw_value",
+        "meaning",
+        "confidence"
+      ],
+      "title": "VersionEvidence",
+      "type": "object"
+    },
+    "VersionMeaning": {
+      "enum": [
+        "declared_minimum",
+        "declared_maximum",
+        "native_build_api",
+        "project_feature_version",
+        "source_binding_version",
+        "release_claim",
+        "branch_claim",
+        "inferred_only"
+      ],
+      "title": "VersionMeaning",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "addon_files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Addon Files",
+      "type": "array"
+    },
+    "baseline_decision": {
+      "$ref": "#/$defs/BaselineDecision",
+      "default": "unknown"
+    },
+    "candidate_demo_scenes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Candidate Demo Scenes",
+      "type": "array"
+    },
+    "contains_dotnet": {
+      "default": false,
+      "title": "Contains Dotnet",
+      "type": "boolean"
+    },
+    "contains_editor_plugin": {
+      "default": false,
+      "title": "Contains Editor Plugin",
+      "type": "boolean"
+    },
+    "contains_engine_module": {
+      "default": false,
+      "title": "Contains Engine Module",
+      "type": "boolean"
+    },
+    "contains_gdextension": {
+      "default": false,
+      "title": "Contains Gdextension",
+      "type": "boolean"
+    },
+    "contains_native_binaries": {
+      "default": false,
+      "title": "Contains Native Binaries",
+      "type": "boolean"
+    },
+    "contains_native_source": {
+      "default": false,
+      "title": "Contains Native Source",
+      "type": "boolean"
+    },
+    "contains_runtime_library": {
+      "default": false,
+      "title": "Contains Runtime Library",
+      "type": "boolean"
+    },
+    "contains_rust": {
+      "default": false,
+      "title": "Contains Rust",
+      "type": "boolean"
+    },
+    "effective_api_confidence": {
+      "$ref": "#/$defs/Confidence",
+      "default": "low"
+    },
+    "effective_api_target": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Effective Api Target"
+    },
+    "entry_scripts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Entry Scripts",
+      "type": "array"
+    },
+    "gdextension_manifests": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Gdextension Manifests",
+      "type": "array"
+    },
+    "languages": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Languages",
+      "type": "array"
+    },
+    "native_architectures": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Native Architectures",
+      "type": "array"
+    },
+    "native_libraries": {
+      "items": {
+        "$ref": "#/$defs/NativeLibrary"
+      },
+      "title": "Native Libraries",
+      "type": "array"
+    },
+    "native_platforms": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Native Platforms",
+      "type": "array"
+    },
+    "package_kind": {
+      "$ref": "#/$defs/PackageKind",
+      "default": "unknown"
+    },
+    "plugin_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Plugin Ids",
+      "type": "array"
+    },
+    "plugin_roots": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Plugin Roots",
+      "type": "array"
+    },
+    "project_files": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Project Files",
+      "type": "array"
+    },
+    "version_conflicts": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Version Conflicts",
+      "type": "array"
+    },
+    "version_evidence": {
+      "items": {
+        "$ref": "#/$defs/VersionEvidence"
+      },
+      "title": "Version Evidence",
+      "type": "array"
+    }
+  },
+  "title": "PluginInventory",
+  "type": "object"
+}

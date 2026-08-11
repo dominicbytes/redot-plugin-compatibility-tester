@@ -1,0 +1,1325 @@
+{
+  "$defs": {
+    "BaselineDecision": {
+      "enum": [
+        "skip",
+        "test_required",
+        "forced_test",
+        "unknown"
+      ],
+      "title": "BaselineDecision",
+      "type": "string"
+    },
+    "CompatibilityStatus": {
+      "enum": [
+        "NO_PORT_NEEDED_BASELINE_POLICY",
+        "COMPATIBLE_UNCHANGED",
+        "COMPATIBLE_REPACKAGE_ONLY",
+        "PORT_REQUIRED_GDSCRIPT_API",
+        "PORT_REQUIRED_EDITOR_API",
+        "PORT_REQUIRED_RUNTIME_API",
+        "PORT_REQUIRED_NATIVE_REBUILD",
+        "PORT_REQUIRED_NATIVE_SOURCE",
+        "PORT_REQUIRED_RUST_BINDINGS",
+        "PORT_REQUIRED_ENGINE_MODULE",
+        "PORT_REQUIRED_EXPORT_PACKAGING",
+        "ENGINE_API_GAP",
+        "INVALID_PACKAGE",
+        "UPSTREAM_PACKAGE_FAILURE",
+        "MISSING_PLATFORM_BINARY",
+        "MISSING_BUILD_ARTIFACT",
+        "MISSING_DOTNET_ENGINE",
+        "MISSING_EXTERNAL_SERVICE",
+        "DISPLAY_REQUIRED",
+        "TIMEOUT",
+        "CRASHED",
+        "INCONCLUSIVE",
+        "INTERNAL_TESTER_ERROR"
+      ],
+      "title": "CompatibilityStatus",
+      "type": "string"
+    },
+    "Confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    },
+    "EngineIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "title": "Architecture",
+          "type": "string"
+        },
+        "binary_path": {
+          "title": "Binary Path",
+          "type": "string"
+        },
+        "binary_sha256": {
+          "pattern": "^[a-fA-F0-9]{64}$",
+          "title": "Binary Sha256",
+          "type": "string"
+        },
+        "compatibility_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Compatibility Version"
+        },
+        "extension_api_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extension Api Path"
+        },
+        "extension_api_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-fA-F0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extension Api Sha256"
+        },
+        "help_output_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-fA-F0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Help Output Sha256"
+        },
+        "is_dotnet": {
+          "default": false,
+          "title": "Is Dotnet",
+          "type": "boolean"
+        },
+        "platform": {
+          "title": "Platform",
+          "type": "string"
+        },
+        "precision": {
+          "default": "single",
+          "title": "Precision",
+          "type": "string"
+        },
+        "product_name": {
+          "title": "Product Name",
+          "type": "string"
+        },
+        "product_version": {
+          "title": "Product Version",
+          "type": "string"
+        },
+        "source_archive_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-fA-F0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Archive Sha256"
+        },
+        "source_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Revision"
+        },
+        "version_output": {
+          "title": "Version Output",
+          "type": "string"
+        }
+      },
+      "required": [
+        "product_name",
+        "product_version",
+        "binary_path",
+        "binary_sha256",
+        "platform",
+        "architecture",
+        "version_output"
+      ],
+      "title": "EngineIdentity",
+      "type": "object"
+    },
+    "EngineRole": {
+      "enum": [
+        "redot",
+        "godot_control",
+        "none"
+      ],
+      "title": "EngineRole",
+      "type": "string"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "api_diff_match": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Diff Match"
+        },
+        "category": {
+          "$ref": "#/$defs/FindingCategory"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "engine_role": {
+          "$ref": "#/$defs/EngineRole",
+          "default": "none"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PhaseName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "raw_log_excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Log Excerpt"
+        },
+        "recommendation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recommendation"
+        },
+        "severity": {
+          "$ref": "#/$defs/FindingSeverity"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "category",
+        "message"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingCategory": {
+      "enum": [
+        "archive",
+        "source",
+        "layout",
+        "version",
+        "native",
+        "gdscript",
+        "editor",
+        "runtime",
+        "export",
+        "engine",
+        "platform",
+        "security",
+        "tester",
+        "upstream"
+      ],
+      "title": "FindingCategory",
+      "type": "string"
+    },
+    "FindingSeverity": {
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "critical"
+      ],
+      "title": "FindingSeverity",
+      "type": "string"
+    },
+    "HarnessEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "title": "Event",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "schema": {
+          "title": "Schema",
+          "type": "integer"
+        },
+        "sequence": {
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema",
+        "run_id",
+        "sequence",
+        "event"
+      ],
+      "title": "HarnessEvent",
+      "type": "object"
+    },
+    "NativeLibrary": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Architecture"
+        },
+        "build": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Build"
+        },
+        "entry_symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entry Symbol"
+        },
+        "exists": {
+          "title": "Exists",
+          "type": "boolean"
+        },
+        "features": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Features",
+          "type": "array"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "platform": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Platform"
+        },
+        "precision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Precision"
+        },
+        "selector": {
+          "title": "Selector",
+          "type": "string"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-fA-F0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        }
+      },
+      "required": [
+        "selector",
+        "path",
+        "exists"
+      ],
+      "title": "NativeLibrary",
+      "type": "object"
+    },
+    "PackageKind": {
+      "enum": [
+        "gdscript",
+        "gdextension_prebuilt",
+        "cpp_source",
+        "rust_source",
+        "dotnet",
+        "engine_module",
+        "project",
+        "mixed",
+        "unknown"
+      ],
+      "title": "PackageKind",
+      "type": "string"
+    },
+    "PhaseName": {
+      "enum": [
+        "doctor",
+        "import",
+        "parse",
+        "dotnet",
+        "editor",
+        "runtime",
+        "gui",
+        "export",
+        "control"
+      ],
+      "title": "PhaseName",
+      "type": "string"
+    },
+    "PhaseResult": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Artifacts",
+          "type": "array"
+        },
+        "combined_log_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Combined Log Path"
+        },
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Command",
+          "type": "array"
+        },
+        "duration_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Ms"
+        },
+        "engine_role": {
+          "$ref": "#/$defs/EngineRole"
+        },
+        "environment_redacted": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Environment Redacted",
+          "type": "object"
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exit Code"
+        },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
+        "finished_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Finished At"
+        },
+        "phase_name": {
+          "$ref": "#/$defs/PhaseName"
+        },
+        "sentinel_events": {
+          "items": {
+            "$ref": "#/$defs/HarnessEvent"
+          },
+          "title": "Sentinel Events",
+          "type": "array"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "status": {
+          "$ref": "#/$defs/PhaseStatus",
+          "default": "not_run"
+        },
+        "stderr_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stderr Path"
+        },
+        "stdout_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stdout Path"
+        },
+        "terminated_by_signal": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Terminated By Signal"
+        },
+        "timed_out": {
+          "default": false,
+          "title": "Timed Out",
+          "type": "boolean"
+        },
+        "working_directory": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Directory"
+        }
+      },
+      "required": [
+        "phase_name",
+        "engine_role"
+      ],
+      "title": "PhaseResult",
+      "type": "object"
+    },
+    "PhaseStatus": {
+      "enum": [
+        "not_run",
+        "pass",
+        "fail",
+        "timeout",
+        "crash",
+        "missing_capability",
+        "tester_error"
+      ],
+      "title": "PhaseStatus",
+      "type": "string"
+    },
+    "PluginInventory": {
+      "additionalProperties": false,
+      "properties": {
+        "addon_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Addon Files",
+          "type": "array"
+        },
+        "baseline_decision": {
+          "$ref": "#/$defs/BaselineDecision",
+          "default": "unknown"
+        },
+        "candidate_demo_scenes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Candidate Demo Scenes",
+          "type": "array"
+        },
+        "contains_dotnet": {
+          "default": false,
+          "title": "Contains Dotnet",
+          "type": "boolean"
+        },
+        "contains_editor_plugin": {
+          "default": false,
+          "title": "Contains Editor Plugin",
+          "type": "boolean"
+        },
+        "contains_engine_module": {
+          "default": false,
+          "title": "Contains Engine Module",
+          "type": "boolean"
+        },
+        "contains_gdextension": {
+          "default": false,
+          "title": "Contains Gdextension",
+          "type": "boolean"
+        },
+        "contains_native_binaries": {
+          "default": false,
+          "title": "Contains Native Binaries",
+          "type": "boolean"
+        },
+        "contains_native_source": {
+          "default": false,
+          "title": "Contains Native Source",
+          "type": "boolean"
+        },
+        "contains_runtime_library": {
+          "default": false,
+          "title": "Contains Runtime Library",
+          "type": "boolean"
+        },
+        "contains_rust": {
+          "default": false,
+          "title": "Contains Rust",
+          "type": "boolean"
+        },
+        "effective_api_confidence": {
+          "$ref": "#/$defs/Confidence",
+          "default": "low"
+        },
+        "effective_api_target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effective Api Target"
+        },
+        "entry_scripts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Entry Scripts",
+          "type": "array"
+        },
+        "gdextension_manifests": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Gdextension Manifests",
+          "type": "array"
+        },
+        "languages": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Languages",
+          "type": "array"
+        },
+        "native_architectures": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Native Architectures",
+          "type": "array"
+        },
+        "native_libraries": {
+          "items": {
+            "$ref": "#/$defs/NativeLibrary"
+          },
+          "title": "Native Libraries",
+          "type": "array"
+        },
+        "native_platforms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Native Platforms",
+          "type": "array"
+        },
+        "package_kind": {
+          "$ref": "#/$defs/PackageKind",
+          "default": "unknown"
+        },
+        "plugin_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Plugin Ids",
+          "type": "array"
+        },
+        "plugin_roots": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Plugin Roots",
+          "type": "array"
+        },
+        "project_files": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Project Files",
+          "type": "array"
+        },
+        "version_conflicts": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Version Conflicts",
+          "type": "array"
+        },
+        "version_evidence": {
+          "items": {
+            "$ref": "#/$defs/VersionEvidence"
+          },
+          "title": "Version Evidence",
+          "type": "array"
+        }
+      },
+      "title": "PluginInventory",
+      "type": "object"
+    },
+    "PolicyResult": {
+      "additionalProperties": false,
+      "properties": {
+        "baseline_version": {
+          "title": "Baseline Version",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/BaselineDecision"
+        },
+        "dynamic_testing_performed": {
+          "default": false,
+          "title": "Dynamic Testing Performed",
+          "type": "boolean"
+        },
+        "force_test_baseline": {
+          "default": false,
+          "title": "Force Test Baseline",
+          "type": "boolean"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "baseline_version",
+        "decision",
+        "reason"
+      ],
+      "title": "PolicyResult",
+      "type": "object"
+    },
+    "RecommendedAction": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "text"
+      ],
+      "title": "RecommendedAction",
+      "type": "object"
+    },
+    "SourceKind": {
+      "enum": [
+        "local_directory",
+        "local_archive",
+        "http_archive",
+        "github",
+        "codeberg",
+        "godot_asset_library",
+        "godot_asset_store"
+      ],
+      "title": "SourceKind",
+      "type": "string"
+    },
+    "SourceProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "archive_sha256": {
+          "pattern": "^[a-fA-F0-9]{64}$",
+          "title": "Archive Sha256",
+          "type": "string"
+        },
+        "archive_size": {
+          "minimum": 0,
+          "title": "Archive Size",
+          "type": "integer"
+        },
+        "canonical_url": {
+          "title": "Canonical Url",
+          "type": "string"
+        },
+        "content_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Content Type"
+        },
+        "download_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Download Url"
+        },
+        "host": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host"
+        },
+        "http_etag": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Http Etag"
+        },
+        "license_candidates": {
+          "items": {
+            "type": "string"
+          },
+          "title": "License Candidates",
+          "type": "array"
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Owner"
+        },
+        "published_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Published Digest"
+        },
+        "redirects": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Redirects",
+          "type": "array"
+        },
+        "release_asset_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Release Asset Name"
+        },
+        "release_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Release Id"
+        },
+        "release_tag": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Release Tag"
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository"
+        },
+        "requested_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Ref"
+        },
+        "requested_url_or_path": {
+          "title": "Requested Url Or Path",
+          "type": "string"
+        },
+        "resolved_commit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Commit"
+        },
+        "resolved_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Ref"
+        },
+        "retrieved_at": {
+          "format": "date-time",
+          "title": "Retrieved At",
+          "type": "string"
+        },
+        "source_kind": {
+          "$ref": "#/$defs/SourceKind"
+        }
+      },
+      "required": [
+        "source_kind",
+        "requested_url_or_path",
+        "canonical_url",
+        "retrieved_at",
+        "archive_sha256",
+        "archive_size"
+      ],
+      "title": "SourceProvenance",
+      "type": "object"
+    },
+    "VersionEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "$ref": "#/$defs/Confidence"
+        },
+        "meaning": {
+          "$ref": "#/$defs/VersionMeaning"
+        },
+        "normalized_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized Version"
+        },
+        "notes": {
+          "default": "",
+          "title": "Notes",
+          "type": "string"
+        },
+        "package_applicability": {
+          "items": {
+            "$ref": "#/$defs/PackageKind"
+          },
+          "title": "Package Applicability",
+          "type": "array"
+        },
+        "raw_value": {
+          "title": "Raw Value",
+          "type": "string"
+        },
+        "source_path_or_url": {
+          "title": "Source Path Or Url",
+          "type": "string"
+        },
+        "source_type": {
+          "title": "Source Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_type",
+        "source_path_or_url",
+        "raw_value",
+        "meaning",
+        "confidence"
+      ],
+      "title": "VersionEvidence",
+      "type": "object"
+    },
+    "VersionMeaning": {
+      "enum": [
+        "declared_minimum",
+        "declared_maximum",
+        "native_build_api",
+        "project_feature_version",
+        "source_binding_version",
+        "release_claim",
+        "branch_claim",
+        "inferred_only"
+      ],
+      "title": "VersionMeaning",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "classification": {
+      "$ref": "#/$defs/CompatibilityStatus"
+    },
+    "confidence": {
+      "$ref": "#/$defs/Confidence"
+    },
+    "confidence_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Confidence Reasons",
+      "type": "array"
+    },
+    "control_run_available": {
+      "default": false,
+      "title": "Control Run Available",
+      "type": "boolean"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "title": "Findings",
+      "type": "array"
+    },
+    "godot_control_engine": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EngineIdentity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "inventory": {
+      "$ref": "#/$defs/PluginInventory"
+    },
+    "limitations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Limitations",
+      "type": "array"
+    },
+    "phases": {
+      "items": {
+        "$ref": "#/$defs/PhaseResult"
+      },
+      "title": "Phases",
+      "type": "array"
+    },
+    "platform": {
+      "title": "Platform",
+      "type": "string"
+    },
+    "policy": {
+      "$ref": "#/$defs/PolicyResult"
+    },
+    "port_candidate": {
+      "title": "Port Candidate",
+      "type": "boolean"
+    },
+    "recommended_next_action": {
+      "$ref": "#/$defs/RecommendedAction"
+    },
+    "redot_engine": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EngineIdentity"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "reproduction": {
+      "additionalProperties": true,
+      "title": "Reproduction",
+      "type": "object"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "sandbox": {
+      "default": "none",
+      "title": "Sandbox",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/SourceProvenance"
+    },
+    "tester_version": {
+      "default": "0.1.0",
+      "title": "Tester Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "run_id",
+    "source",
+    "inventory",
+    "policy",
+    "platform",
+    "classification",
+    "confidence",
+    "confidence_reasons",
+    "port_candidate",
+    "recommended_next_action"
+  ],
+  "title": "CompatibilityResult",
+  "type": "object"
+}
