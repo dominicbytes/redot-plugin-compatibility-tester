@@ -11,4 +11,4 @@ Contributions are welcome after the repository is published.
 
 Public pull-request CI runs repository-owned trusted fixtures only. Never submit private plugins, credentials, large binary fixtures, archive bombs, or third-party assets without compatible redistribution rights.
 
-By contributing, you agree that your contribution is licensed under this repository's MIT License and to follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+By contributing, you agree that your contribution is licensed under this repository's MIT License.
