@@ -7,16 +7,14 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 if os.name == "nt":
-    from ctypes import wintypes
-
-    _kernel32: Any = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32: Any = vars(ctypes)["WinDLL"]("kernel32", use_last_error=True)
 else:  # pragma: no cover - exercised by the POSIX runner
-    wintypes = None  # type: ignore[assignment]
     _kernel32 = None
 
+_CREATE_NEW_PROCESS_GROUP = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _PROCESS_TERMINATE = 0x0001
@@ -71,7 +69,7 @@ class WindowsJob:
         _require_windows()
         handle = _kernel32.CreateJobObjectW(None, None)
         if not handle:
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise _windows_error()
         job = cls(int(handle))
         limits = _ExtendedLimitInformation()
         limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -81,7 +79,7 @@ class WindowsJob:
             ctypes.byref(limits),
             ctypes.sizeof(limits),
         ):
-            error = ctypes.WinError(ctypes.get_last_error())
+            error = _windows_error()
             job.close()
             raise error
         return job
@@ -94,10 +92,10 @@ class WindowsJob:
             process_id,
         )
         if not process_handle:
-            raise ctypes.WinError(ctypes.get_last_error())
+            raise _windows_error()
         try:
             if not _kernel32.AssignProcessToJobObject(self._handle, process_handle):
-                raise ctypes.WinError(ctypes.get_last_error())
+                raise _windows_error()
         finally:
             _kernel32.CloseHandle(process_handle)
 
@@ -129,7 +127,7 @@ def launch_in_windows_job(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         shell=False,
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        creationflags=_CREATE_NEW_PROCESS_GROUP,
     )
     job: WindowsJob | None = None
     try:
@@ -160,6 +158,13 @@ def launch_in_windows_job(
 def _require_windows() -> None:
     if os.name != "nt" or _kernel32 is None:
         raise OSError("Windows Job Objects are available only on Windows")
+
+
+def _windows_error() -> OSError:
+    _require_windows()
+    error_factory = vars(ctypes)["WinError"]
+    get_last_error = vars(ctypes)["get_last_error"]
+    return cast(OSError, error_factory(get_last_error()))
 
 
 if os.name == "nt":
