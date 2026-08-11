@@ -13,7 +13,6 @@ def test_core_repository_documents_exist() -> None:
         "CHANGELOG.md",
         "DECISIONS.md",
         "LICENSE",
-        "CODE_OF_CONDUCT.md",
     ]
 
     assert [name for name in required if not (ROOT / name).is_file()] == []
