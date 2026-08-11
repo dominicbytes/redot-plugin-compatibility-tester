@@ -1,0 +1,226 @@
+{
+  "$defs": {
+    "SourceKind": {
+      "enum": [
+        "local_directory",
+        "local_archive",
+        "http_archive",
+        "github",
+        "codeberg",
+        "godot_asset_library",
+        "godot_asset_store"
+      ],
+      "title": "SourceKind",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "archive_sha256": {
+      "pattern": "^[a-fA-F0-9]{64}$",
+      "title": "Archive Sha256",
+      "type": "string"
+    },
+    "archive_size": {
+      "minimum": 0,
+      "title": "Archive Size",
+      "type": "integer"
+    },
+    "canonical_url": {
+      "title": "Canonical Url",
+      "type": "string"
+    },
+    "content_type": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Content Type"
+    },
+    "download_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Download Url"
+    },
+    "host": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Host"
+    },
+    "http_etag": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Http Etag"
+    },
+    "license_candidates": {
+      "items": {
+        "type": "string"
+      },
+      "title": "License Candidates",
+      "type": "array"
+    },
+    "owner": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Owner"
+    },
+    "published_digest": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Published Digest"
+    },
+    "redirects": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Redirects",
+      "type": "array"
+    },
+    "release_asset_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Release Asset Name"
+    },
+    "release_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Release Id"
+    },
+    "release_tag": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Release Tag"
+    },
+    "repository": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Repository"
+    },
+    "requested_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Requested Ref"
+    },
+    "requested_url_or_path": {
+      "title": "Requested Url Or Path",
+      "type": "string"
+    },
+    "resolved_commit": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resolved Commit"
+    },
+    "resolved_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resolved Ref"
+    },
+    "retrieved_at": {
+      "format": "date-time",
+      "title": "Retrieved At",
+      "type": "string"
+    },
+    "source_kind": {
+      "$ref": "#/$defs/SourceKind"
+    }
+  },
+  "required": [
+    "source_kind",
+    "requested_url_or_path",
+    "canonical_url",
+    "retrieved_at",
+    "archive_sha256",
+    "archive_size"
+  ],
+  "title": "SourceProvenance",
+  "type": "object"
+}

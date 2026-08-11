@@ -1,0 +1,130 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "architecture": {
+      "title": "Architecture",
+      "type": "string"
+    },
+    "binary_path": {
+      "title": "Binary Path",
+      "type": "string"
+    },
+    "binary_sha256": {
+      "pattern": "^[a-fA-F0-9]{64}$",
+      "title": "Binary Sha256",
+      "type": "string"
+    },
+    "compatibility_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Compatibility Version"
+    },
+    "extension_api_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Extension Api Path"
+    },
+    "extension_api_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-fA-F0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Extension Api Sha256"
+    },
+    "help_output_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-fA-F0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Help Output Sha256"
+    },
+    "is_dotnet": {
+      "default": false,
+      "title": "Is Dotnet",
+      "type": "boolean"
+    },
+    "platform": {
+      "title": "Platform",
+      "type": "string"
+    },
+    "precision": {
+      "default": "single",
+      "title": "Precision",
+      "type": "string"
+    },
+    "product_name": {
+      "title": "Product Name",
+      "type": "string"
+    },
+    "product_version": {
+      "title": "Product Version",
+      "type": "string"
+    },
+    "source_archive_sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-fA-F0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Archive Sha256"
+    },
+    "source_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Revision"
+    },
+    "version_output": {
+      "title": "Version Output",
+      "type": "string"
+    }
+  },
+  "required": [
+    "product_name",
+    "product_version",
+    "binary_path",
+    "binary_sha256",
+    "platform",
+    "architecture",
+    "version_output"
+  ],
+  "title": "EngineIdentity",
+  "type": "object"
+}

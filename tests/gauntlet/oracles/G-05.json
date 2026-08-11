@@ -1,0 +1,30 @@
+{
+  "gate": "G-05",
+  "oracle_version": 1,
+  "fixture": "tests/fixtures/post_baseline_api_gap",
+  "fixture_sha256": "b13679da450750b6125d678bb00f94f1ad0ce72ae38c7f5dcb3eb8fdf75d760c",
+  "plugin_fixture": "tests/fixtures/differential_api_gap_plugin",
+  "plugin_fixture_sha256": "babbf8601cd25bce16fe2c17548b1aa1848a032b9161086518bdfeaa8ac631dd",
+  "pass_fixture": "tests/fixtures/baseline_gdscript_pass",
+  "pass_fixture_sha256": "836657c1be4d2b72c4b08f4e84e62febaed21e388ba3b00c851bb4719c15bd66",
+  "api_symbol": "enum:SpringBoneSimulator3D.BoneDirection",
+  "phase_configuration_sha256": "3ab017fe87977a4bfd66f5f1d2d151aad10e2326eb5d70ea43d2d8ba559981c5",
+  "expected": {
+    "redot_status": "fail",
+    "control_status": "pass",
+    "differential_outcome": "redot_only_failure",
+    "classification": "PORT_REQUIRED_RUNTIME_API",
+    "confidence": "high",
+    "port_candidate": true
+  },
+  "service_expected": {
+    "classification": "PORT_REQUIRED_EDITOR_API",
+    "confidence": "high",
+    "control_run_available": true
+  },
+  "pass_expected": {
+    "classification": "COMPATIBLE_UNCHANGED",
+    "confidence": "high",
+    "port_candidate": false
+  }
+}

@@ -1,0 +1,34 @@
+name: Bug report
+description: Report incorrect inspection, execution, or classification behavior.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not attach private plugins, credentials, or unredacted logs.
+  - type: input
+    id: version
+    attributes:
+      label: redot-compat version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Redacted command and expected outcome
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Result classification, source hash, and decisive evidence
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options: [static-only, docker_linux, trusted_host]
+    validations:
+      required: true

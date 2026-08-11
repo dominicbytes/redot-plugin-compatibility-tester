@@ -1,0 +1,12 @@
+schema_version = 1
+concurrency = 2
+
+[[items]]
+id = "local-example"
+source = "../tests/fixtures/baseline_gdscript_pass"
+
+# Remote entries must resolve immutably before bytes are inspected.
+# [[items]]
+# id = "github-example"
+# source = "https://github.com/owner/repository"
+# ref = "v1.2.3"

@@ -1,0 +1,28 @@
+{
+  "gate": "G-01",
+  "oracle_version": 1,
+  "baseline_fixture": "tests/fixtures/baseline_gdscript_pass",
+  "baseline_fixture_sha256": "836657c1be4d2b72c4b08f4e84e62febaed21e388ba3b00c851bb4719c15bd66",
+  "expected": {
+    "classification": "NO_PORT_NEEDED_BASELINE_POLICY",
+    "package_kind": "gdscript",
+    "plugin_roots": [
+      "addons/example"
+    ],
+    "port_candidate": false,
+    "phase_count": 0,
+    "process_exit": 10
+  },
+  "unsafe_expected": {
+    "classification": "INVALID_PACKAGE",
+    "finding_code": "UNSAFE_ARCHIVE",
+    "process_exit": 30,
+    "source_tree_retained": false
+  },
+  "allowed_volatile_fields": [
+    "run_id",
+    "created_at",
+    "source.retrieved_at"
+  ]
+}
+

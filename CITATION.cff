@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If this tool supports your compatibility research, cite the repository and exact release."
+title: "Redot Plugin Compatibility Tester"
+type: software
+authors:
+  - name: DominicBytes
+repository-code: "https://github.com/dominicbytes/redot-plugin-compatibility-tester"
+license: MIT
+version: 0.1.0

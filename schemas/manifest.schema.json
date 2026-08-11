@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "PhaseName": {
+      "enum": [
+        "doctor",
+        "import",
+        "parse",
+        "dotnet",
+        "editor",
+        "runtime",
+        "gui",
+        "export",
+        "control"
+      ],
+      "title": "PhaseName",
+      "type": "string"
+    },
+    "Probe": {
+      "additionalProperties": false,
+      "properties": {
+        "expected": {
+          "default": true,
+          "title": "Expected",
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/ProbeType"
+        },
+        "value": {
+          "maxLength": 512,
+          "minLength": 1,
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "title": "Probe",
+      "type": "object"
+    },
+    "ProbeType": {
+      "enum": [
+        "class_exists",
+        "resource_exists",
+        "node_exists"
+      ],
+      "title": "ProbeType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "phases": {
+      "items": {
+        "$ref": "#/$defs/PhaseName"
+      },
+      "title": "Phases",
+      "type": "array"
+    },
+    "plugin_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+      "title": "Plugin Id",
+      "type": "string"
+    },
+    "probes": {
+      "items": {
+        "$ref": "#/$defs/Probe"
+      },
+      "maxItems": 128,
+      "title": "Probes",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "timeout_seconds": {
+      "default": 120,
+      "maximum": 600,
+      "minimum": 1,
+      "title": "Timeout Seconds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "plugin_id"
+  ],
+  "title": "PluginTestManifest",
+  "type": "object"
+}

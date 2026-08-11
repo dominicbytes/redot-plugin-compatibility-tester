@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1.7
+FROM python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
+
+ARG REDOT_URL
+ARG REDOT_SHA256
+
+LABEL org.opencontainers.image.title="redot-compat worker" \
+      org.opencontainers.image.source="https://github.com/dominicbytes/redot-plugin-compatibility-tester" \
+      org.opencontainers.image.licenses="MIT"
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl unzip xvfb \
+      libasound2 libfontconfig1 libgl1 libxi6 libxinerama1 libxcursor1 libx11-6; \
+    rm -rf /var/lib/apt/lists/*; \
+    test -n "$REDOT_URL"; \
+    echo "$REDOT_SHA256" | grep -Eq '^[a-f0-9]{64}$'; \
+    curl --fail --location --proto '=https' --tlsv1.2 "$REDOT_URL" --output /tmp/redot.zip; \
+    echo "$REDOT_SHA256  /tmp/redot.zip" | sha256sum --check --strict; \
+    mkdir -p /tmp/redot-extract /opt/redot; \
+    unzip -q /tmp/redot.zip -d /tmp/redot-extract; \
+    engine="$(find /tmp/redot-extract -type f -name '*editor*x86_64*' | head -n 1)"; \
+    test -n "$engine"; \
+    cp "$engine" /opt/redot/redot; \
+    chmod 0555 /opt/redot/redot; \
+    rm -rf /tmp/redot.zip /tmp/redot-extract; \
+    groupadd --gid 10001 worker; \
+    useradd --uid 10001 --gid 10001 --no-create-home --home-dir /home/worker worker
+
+COPY docker/requirements.lock /opt/redot-compat/requirements.lock
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
+RUN python -m pip install --no-cache-dir --require-hashes \
+      --requirement /opt/redot-compat/requirements.lock
+
+COPY src /opt/redot-compat/src
+COPY harness /opt/redot-compat/harness
+COPY LICENSE /opt/redot-compat/LICENSE
+
+ENV HOME=/home/worker \
+    PYTHONPATH=/opt/redot-compat/src \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER 10001:10001
+WORKDIR /opt/redot-compat
+ENTRYPOINT ["python", "-m", "redot_compat.worker"]

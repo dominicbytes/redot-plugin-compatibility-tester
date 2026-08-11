@@ -1,0 +1,21 @@
+[paths]
+output_root = "../reports"
+cache_root = "../.redot-compat/cache"
+
+[limits]
+max_archive_bytes = 536870912
+max_expanded_bytes = 2147483648
+max_file_bytes = 536870912
+max_entries = 100000
+max_path_length = 512
+max_depth = 32
+max_expansion_ratio = 200.0
+
+[timeouts]
+doctor = 30
+import = 180
+parse = 20
+editor = 120
+runtime = 120
+gui = 180
+export = 600

@@ -1,0 +1,60 @@
+name: Trusted Redot integration
+
+on:
+  workflow_dispatch:
+    inputs:
+      redot_url:
+        description: Exact official Redot Windows ZIP URL
+        required: true
+        type: string
+      redot_sha256:
+        description: Published lowercase SHA-256 for the ZIP
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  trusted-fixture:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.7"
+          python-version: "3.12"
+      - name: Sync frozen dependencies
+        run: uv sync --frozen
+      - name: Download and verify the exact engine archive
+        shell: pwsh
+        env:
+          REDOT_URL: ${{ inputs.redot_url }}
+          REDOT_SHA256: ${{ inputs.redot_sha256 }}
+        run: |
+          if ($env:REDOT_SHA256 -notmatch '^[a-f0-9]{64}$') { throw 'Invalid SHA-256 input' }
+          Invoke-WebRequest -Uri $env:REDOT_URL -OutFile "$env:RUNNER_TEMP/redot.zip"
+          $actual = (Get-FileHash "$env:RUNNER_TEMP/redot.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:REDOT_SHA256) { throw "Engine digest mismatch: $actual" }
+          Expand-Archive "$env:RUNNER_TEMP/redot.zip" "$env:RUNNER_TEMP/redot"
+      - name: Doctor engine and run only the frozen synthetic fixture
+        shell: pwsh
+        run: |
+          $engine = Get-ChildItem "$env:RUNNER_TEMP/redot" -Recurse -Filter '*console.exe' | Select-Object -First 1
+          if (-not $engine) { throw 'Console editor was not found in the verified archive' }
+          uv run --frozen redot-compat doctor --redot $engine.FullName --output artifacts/doctor
+          uv run --frozen redot-compat test tests/fixtures/baseline_gdscript_pass `
+            --force-test-baseline --backend host --trusted-source `
+            --allow-unsafe-host-execution --redot $engine.FullName --output artifacts/host-smoke
+      - name: Upload retained evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trusted-redot-evidence
+          path: artifacts/
+          if-no-files-found: error

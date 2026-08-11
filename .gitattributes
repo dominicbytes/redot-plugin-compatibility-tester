@@ -1,0 +1,30 @@
+* text=auto eol=lf
+
+*.py text eol=lf
+*.gd text eol=lf
+*.tscn text eol=lf
+*.tres text eol=lf
+*.godot text eol=lf
+*.cfg text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ps1 text eol=crlf
+*.sh text eol=lf
+
+*.xlsx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.dll binary
+*.so binary
+*.dylib binary
+
+# Frozen G-01 bytes intentionally retain their terminal blank lines.
+tests/fixtures/baseline_gdscript_pass/** whitespace=-blank-at-eof
+tests/gauntlet/oracles/G-01.json whitespace=-blank-at-eof
