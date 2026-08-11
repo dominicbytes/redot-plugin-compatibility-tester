@@ -33,7 +33,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-pretty = ["rich>=13.9,<15"]
+pretty = ["rich>=13.9,<16"]
 
 [project.scripts]
 redot-compat = "redot_compat.cli:main"
