@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b AS engine-download
+FROM python:3.14.8-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83 AS engine-download
 
 ARG REDOT_VERSION=26.3-stable
 ARG REDOT_SHA512=d370f50a85efa1c62549743c9c55f56fdac3f4ea66f353bfa3135d4c4fe68ef47849db7ce5d37b6ab9b09c5aa6ee748e10f44dc2c55485f3e799f5dfe2344166
@@ -20,7 +20,7 @@ RUN set -eux; \
     cd /opt/redot; \
     sha256sum redot > SHA256SUMS
 
-FROM python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
+FROM python:3.14.8-slim-bookworm@sha256:48b13b003dda20b16f9442b8475aa05fe21bf6579a8c881db92ffb4d8fd20f83
 
 LABEL org.opencontainers.image.title="redot-compat worker" \
       org.opencontainers.image.source="https://github.com/dominicbytes/redot-plugin-compatibility-tester" \
