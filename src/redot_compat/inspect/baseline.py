@@ -3,7 +3,13 @@ from __future__ import annotations
 from packaging.version import Version
 
 from redot_compat.constants import BASELINE_VERSION
-from redot_compat.models import BaselineDecision, Confidence, PluginInventory, PolicyResult
+from redot_compat.models import (
+    BaselineDecision,
+    Confidence,
+    PluginInventory,
+    PolicyResult,
+    VersionMeaning,
+)
 
 
 def apply_baseline_policy(
@@ -13,6 +19,32 @@ def apply_baseline_policy(
     force_test: bool = False,
 ) -> PolicyResult:
     target = inventory.effective_api_target
+    reason = None
+    if target and Version(target).major < 4:
+        reason = "Godot 3 targets require a major-version port to Redot's Godot 4 lineage."
+    elif any(item.source_type == "dotnet_sdk" for item in inventory.version_evidence):
+        reason = (
+            "Godot.NET.Sdk must be migrated to Redot.NET.Sdk/26.x before compatibility testing."
+        )
+    elif any(
+        item.meaning is VersionMeaning.DECLARED_MAXIMUM
+        and item.confidence in {Confidence.HIGH, Confidence.MEDIUM}
+        and item.normalized_version
+        and Version(item.normalized_version) < Version(baseline)
+        for item in inventory.version_evidence
+    ):
+        reason = "The GDExtension compatibility maximum is below the Redot baseline."
+    elif len(inventory.plugin_roots) > 1:
+        reason = "Multiple plugin roots require an explicit plugin selection before a policy skip."
+    elif inventory.findings:
+        reason = "Package layout or path-safety findings require correction before a policy skip."
+    if reason:
+        return PolicyResult(
+            baseline_version=baseline,
+            decision=BaselineDecision.TEST_REQUIRED,
+            reason=reason,
+            force_test_baseline=force_test,
+        )
     if not target:
         return PolicyResult(
             baseline_version=baseline,

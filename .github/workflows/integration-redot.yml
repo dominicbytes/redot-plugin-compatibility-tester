@@ -5,10 +5,12 @@ on:
     inputs:
       redot_url:
         description: Exact official Redot Windows ZIP URL
+        default: https://github.com/Redot-Engine/redot-engine/releases/download/redot-26.3-stable/Redot_v26.3-stable_windows_win64.zip
         required: true
         type: string
       redot_sha256:
         description: Published lowercase SHA-256 for the ZIP
+        default: 2c6c7b4e96a88ca44eb413d9a5d43b8468b60a346c2448854c1a0c6bc9baab76
         required: true
         type: string
 
@@ -45,12 +47,26 @@ jobs:
       - name: Doctor engine and run only the frozen synthetic fixture
         shell: pwsh
         run: |
-          $engine = Get-ChildItem "$env:RUNNER_TEMP/redot" -Recurse -Filter '*console.exe' | Select-Object -First 1
-          if (-not $engine) { throw 'Console editor was not found in the verified archive' }
+          $engines = @(Get-ChildItem "$env:RUNNER_TEMP/redot" -Recurse -Filter redot.windows.editor.x86_64.console.exe)
+          if ($engines.Count -ne 1) { throw "Expected exactly one console editor" }
+          $engine = $engines[0]
           uv run --frozen redot-compat doctor --redot $engine.FullName --output artifacts/doctor
           uv run --frozen redot-compat test tests/fixtures/baseline_gdscript_pass `
             --force-test-baseline --backend host --trusted-source `
             --allow-unsafe-host-execution --redot $engine.FullName --output artifacts/host-smoke
+      - name: Run gated host and engine integration oracles
+        if: always()
+        shell: pwsh
+        env:
+          REDOT_SHA256: ${{ inputs.redot_sha256 }}
+        run: |
+          $engines = @(Get-ChildItem "$env:RUNNER_TEMP/redot" -Recurse -Filter redot.windows.editor.x86_64.console.exe)
+          if ($engines.Count -ne 1) { throw "Expected exactly one console editor" }
+          uv run --frozen pytest -q -m "gauntlet or integration" tests/gauntlet tests/integration `
+            --integration-host --integration-redot $engines[0].FullName `
+            --integration-redot-archive "$env:RUNNER_TEMP/redot.zip" `
+            --integration-redot-archive-sha256 $env:REDOT_SHA256 `
+            --junitxml=artifacts/integration.xml
       - name: Upload retained evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

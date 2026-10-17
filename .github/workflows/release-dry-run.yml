@@ -31,7 +31,10 @@ jobs:
           uv run --frozen pytest -q
           uv run --frozen redot-compat schema export --check
       - name: Audit locked dependencies
-        run: uv run --frozen pip-audit --format cyclonedx-json --output release/sbom.cdx.json
+        run: |
+          mkdir -p release
+          uv export --frozen --no-dev --no-hashes --no-emit-project -o release/requirements.txt
+          uv run --frozen pip-audit -r release/requirements.txt --format cyclonedx-json --output release/sbom.cdx.json
       - name: Build and record local release evidence
         run: |
           uv run --frozen python -m build
@@ -39,7 +42,7 @@ jobs:
       - name: Upload dry-run artifacts only
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-dry-run-${{ github.ref_name }}
+          name: release-dry-run-${{ github.sha }}
           path: |
             dist/
             release/

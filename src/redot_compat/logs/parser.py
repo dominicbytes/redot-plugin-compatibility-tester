@@ -10,7 +10,24 @@ from redot_compat.models import (
     PhaseName,
 )
 
+_ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
+_ERROR = re.compile(r"^(?:(?:SCRIPT|USER) )?ERROR:", re.IGNORECASE)
+_WARNING = re.compile(r"^(?:USER )?WARNING:", re.IGNORECASE)
+_LEAK = re.compile(
+    r"ObjectDB instances leaked at exit|RID allocations?.*were leaked at exit|"
+    r"resources? still in use at exit|Leaked instance|RIDs? of type .* were leaked\.",
+    re.IGNORECASE,
+)
+
 _PATTERNS = (
+    (
+        re.compile(
+            r"(?:identifier|member).*(?:not declared|not found|doesn't exist)", re.IGNORECASE
+        ),
+        "API_SYMBOL_MISSING",
+        FindingSeverity.ERROR,
+        FindingCategory.ENGINE,
+    ),
     (
         re.compile(r"(?:SCRIPT ERROR: )?Parse Error:", re.IGNORECASE),
         "GDSCRIPT_PARSE_ERROR",
@@ -24,20 +41,16 @@ _PATTERNS = (
         FindingCategory.NATIVE,
     ),
     (
-        re.compile(
-            r"(?:identifier|member).*(?:not declared|not found|doesn't exist)", re.IGNORECASE
-        ),
-        "API_SYMBOL_MISSING",
-        FindingSeverity.ERROR,
-        FindingCategory.ENGINE,
-    ),
-    (
-        re.compile(r"editor plugin.*(?:failed|error|disabled)", re.IGNORECASE),
+        re.compile(r"Unable to load addon script|Disabling the addon", re.IGNORECASE),
         "EDITOR_ACTIVATION_FAILURE",
         FindingSeverity.ERROR,
         FindingCategory.EDITOR,
     ),
 )
+
+
+def strip_ansi(text: str) -> str:
+    return _ANSI.sub("", text)
 
 
 def parse_engine_log(
@@ -50,9 +63,22 @@ def parse_engine_log(
     if excerpt_limit <= 0:
         raise ValueError("excerpt_limit must be positive")
     findings: list[Finding] = []
-    for line in text.splitlines():
+    for line in strip_ansi(text).splitlines():
         stripped = line.strip()
         if not stripped:
+            continue
+        if _LEAK.search(stripped):
+            findings.append(
+                Finding(
+                    code="SHUTDOWN_RESOURCE_LEAK",
+                    severity=FindingSeverity.WARNING,
+                    category=FindingCategory.ENGINE,
+                    message="The engine reported resources still allocated during shutdown.",
+                    phase=phase,
+                    engine_role=engine_role,
+                    raw_log_excerpt=stripped[:excerpt_limit],
+                )
+            )
             continue
         if (
             stripped == "WARNING: Scan thread aborted..."
@@ -73,6 +99,8 @@ def parse_engine_log(
                 )
             )
             continue
+        if not (_ERROR.match(stripped) or _WARNING.match(stripped)):
+            continue
         for pattern, code, severity, category in _PATTERNS:
             if pattern.search(stripped):
                 findings.append(
@@ -88,7 +116,7 @@ def parse_engine_log(
                 )
                 break
         else:
-            if re.search(r"\bwarning\s*:", stripped, re.IGNORECASE):
+            if _WARNING.match(stripped):
                 findings.append(
                     Finding(
                         code="UNREVIEWED_WARNING",
@@ -100,7 +128,7 @@ def parse_engine_log(
                         raw_log_excerpt=stripped[:excerpt_limit],
                     )
                 )
-            elif re.search(r"\berror\s*:", stripped, re.IGNORECASE):
+            elif _ERROR.match(stripped):
                 findings.append(
                     Finding(
                         code="UNREVIEWED_ERROR",

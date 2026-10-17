@@ -34,13 +34,56 @@ class ClassificationDecision(ContractModel):
 
 
 def classify(context: ClassificationContext) -> ClassificationDecision:
+    decision = _classify(context)
+    if any(
+        finding.code
+        in {"ENGINE_INTERMITTENT_SHUTDOWN_CRASH", "ENGINE_SHUTDOWN_CRASH_RETRY_EXHAUSTED"}
+        for phase in context.phases
+        for finding in phase.findings
+    ):
+        if decision.confidence is Confidence.HIGH:
+            decision.confidence = Confidence.MEDIUM
+        exhausted = any(
+            finding.code == "ENGINE_SHUTDOWN_CRASH_RETRY_EXHAUSTED"
+            for phase in context.phases
+            for finding in phase.findings
+        )
+        decision.confidence_reasons.append(
+            "All attempts crashed after authenticated completion; shutdown stability is unverified."
+            if exhausted
+            else "An intermittent post-terminal shutdown crash did not recur on retry; "
+            "engine attribution remains uncertain."
+        )
+    return decision
+
+
+def _classify(context: ClassificationContext) -> ClassificationDecision:
     redot = [phase for phase in context.phases if phase.engine_role is EngineRole.REDOT]
     controls = {
         phase.phase_name: phase
         for phase in context.phases
         if phase.engine_role is EngineRole.GODOT_CONTROL
     }
-    if any(phase.status is PhaseStatus.TESTER_ERROR for phase in context.phases):
+    codes = {finding.code for phase in context.phases for finding in phase.findings}
+    if "HARNESS_EVENT_UNAUTHENTICATED" in codes:
+        return _decision(
+            CompatibilityStatus.INCONCLUSIVE,
+            Confidence.HIGH,
+            False,
+            "REVIEW_PACKAGE_TAMPERING",
+            "Review unauthenticated harness output and package tampering.",
+            "Output carried an event that could not be authenticated to the owned session.",
+        )
+    if "LOG_TRUNCATED" in codes:
+        return _decision(
+            CompatibilityStatus.INCONCLUSIVE,
+            Confidence.HIGH,
+            False,
+            "RAISE_LOG_LIMIT",
+            "Raise the retained log limit and repeat the contained run.",
+            "Truncated engine logs cannot establish complete phase evidence.",
+        )
+    if any(phase.status is PhaseStatus.TESTER_ERROR for phase in redot):
         return _decision(
             CompatibilityStatus.INTERNAL_TESTER_ERROR,
             Confidence.HIGH,
@@ -57,6 +100,20 @@ def classify(context: ClassificationContext) -> ClassificationDecision:
             "FIX_PACKAGE_LAYOUT",
             "Provide a supported plugin, project, or native package layout.",
             "No supported package root was inventoried.",
+        )
+    if context.exact_control and any(
+        compare_phase_status(phase.status, controls[phase.phase_name].status)
+        is DifferentialOutcome.NOT_COMPARABLE
+        for phase in redot
+        if phase.phase_name in controls
+    ):
+        return _decision(
+            CompatibilityStatus.INCONCLUSIVE,
+            Confidence.HIGH,
+            False,
+            "FIX_CONTROL_FIXTURE",
+            "Restore a comparable exact-control run before attributing failure.",
+            "A matched phase lacks comparable control evidence.",
         )
     crashed = next((phase for phase in redot if phase.status is PhaseStatus.CRASH), None)
     if crashed is not None:
@@ -146,14 +203,13 @@ def classify(context: ClassificationContext) -> ClassificationDecision:
         )
     failed = next((phase for phase in redot if phase.status is PhaseStatus.FAIL), None)
     if failed:
-        status = _failure_status(context, failed.phase_name)
-        exact_specific = context.exact_control and controls.get(failed.phase_name) is not None
+        exact_specific = _control_passed(failed, controls, context.exact_control)
+        status = _failure_status(context, failed.phase_name, exact_specific)
         confidence = Confidence.HIGH if exact_specific else Confidence.MEDIUM
         return _decision(
             status,
             confidence,
-            status.value.startswith("PORT_REQUIRED_")
-            or status is CompatibilityStatus.ENGINE_API_GAP,
+            exact_specific,
             _action_code(status),
             _action_text(status),
             (
@@ -237,8 +293,12 @@ def _control_passed(
     return exact_control and control is not None and control.status is PhaseStatus.PASS
 
 
-def _failure_status(context: ClassificationContext, phase_name: PhaseName) -> CompatibilityStatus:
-    if context.api_gap_direct and context.exact_control:
+def _failure_status(
+    context: ClassificationContext,
+    phase_name: PhaseName,
+    exact_specific: bool,
+) -> CompatibilityStatus:
+    if context.api_gap_direct and exact_specific:
         return CompatibilityStatus.ENGINE_API_GAP
     if phase_name in {PhaseName.IMPORT, PhaseName.PARSE}:
         return CompatibilityStatus.PORT_REQUIRED_GDSCRIPT_API

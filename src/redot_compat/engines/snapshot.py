@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Literal
 
@@ -8,6 +7,11 @@ from pydantic import Field
 
 from redot_compat.archive.hash import sha256_file
 from redot_compat.engines.doctor import doctor_engine
+from redot_compat.engines.extension_api import (
+    extension_api_lineage,
+    read_extension_api,
+    review_dump_diagnostics,
+)
 from redot_compat.errors import EngineError
 from redot_compat.models.base import ContractModel
 from redot_compat.models.engine import EngineIdentity
@@ -20,6 +24,7 @@ class SnapshotRun(ContractModel):
     snapshot_path: str
     snapshot_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     process: ProcessResult
+    warnings: list[str] = Field(default_factory=list)
 
 
 class EngineSnapshotReport(ContractModel):
@@ -90,21 +95,22 @@ def snapshot_engine(
         )
         if process.timed_out:
             raise EngineError(f"extension API dump {run_number} timed out")
-        if process.exit_code != 0:
-            raise EngineError(
-                f"extension API dump {run_number} exited {process.exit_code}; "
-                f"see {process.combined_log_path}"
-            )
         snapshot = work / "extension_api.json"
         if not snapshot.is_file():
             raise EngineError(f"extension API dump {run_number} produced no extension_api.json")
-        _reject_unexplained_engine_diagnostics(process, run_number)
+        payload = read_extension_api(snapshot)
+        if extension_api_lineage(payload) != engine.compatibility_version:
+            raise EngineError(
+                f"extension API dump {run_number} lineage differs from doctor identity"
+            )
+        warnings = _reject_unexplained_engine_diagnostics(process, run_number, engine)
         runs.append(
             SnapshotRun(
                 run_number=run_number,
                 snapshot_path=str(snapshot),
                 snapshot_sha256=sha256_file(snapshot),
                 process=process,
+                warnings=warnings,
             )
         )
 
@@ -135,27 +141,14 @@ def validate_snapshot_pair(first: Path, second: Path) -> str:
     second_bytes = second.read_bytes()
     if first_bytes != second_bytes:
         raise EngineError("fresh extension API snapshots are not byte-identical")
-    try:
-        payload = json.loads(first_bytes)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EngineError(f"extension API snapshot is not valid UTF-8 JSON: {exc}") from exc
-    if (
-        not isinstance(payload, dict)
-        or not isinstance(payload.get("header"), dict)
-        or not isinstance(payload.get("classes"), list)
-    ):
-        raise EngineError("extension API snapshot lacks required sections: header and classes")
+    read_extension_api(first)
     return sha256_file(first)
 
 
-def _reject_unexplained_engine_diagnostics(process: ProcessResult, run_number: int) -> None:
-    text = "\n".join(
-        Path(path).read_text(encoding="utf-8", errors="replace")
-        for path in (process.stdout_path, process.stderr_path)
-    )
-    diagnostics = [
-        line for line in text.splitlines() if "ERROR" in line.upper() or "WARNING" in line.upper()
-    ]
-    if diagnostics:
-        excerpt = " | ".join(diagnostics[:3])[:1000]
-        raise EngineError(f"extension API dump {run_number} emitted diagnostics: {excerpt}")
+def _reject_unexplained_engine_diagnostics(
+    process: ProcessResult, run_number: int, engine: EngineIdentity | None = None
+) -> list[str]:
+    try:
+        return review_dump_diagnostics(process, engine)
+    except EngineError as exc:
+        raise EngineError(f"extension API dump {run_number}: {exc}") from exc

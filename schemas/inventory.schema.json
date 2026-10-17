@@ -19,6 +19,159 @@
       "title": "Confidence",
       "type": "string"
     },
+    "EngineRole": {
+      "enum": [
+        "redot",
+        "godot_control",
+        "none"
+      ],
+      "title": "EngineRole",
+      "type": "string"
+    },
+    "Finding": {
+      "additionalProperties": false,
+      "properties": {
+        "api_diff_match": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Diff Match"
+        },
+        "category": {
+          "$ref": "#/$defs/FindingCategory"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "engine_role": {
+          "$ref": "#/$defs/EngineRole",
+          "default": "none"
+        },
+        "file": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File"
+        },
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Line"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PhaseName"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "raw_log_excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Log Excerpt"
+        },
+        "recommendation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recommendation"
+        },
+        "severity": {
+          "$ref": "#/$defs/FindingSeverity"
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Symbol"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "category",
+        "message"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingCategory": {
+      "enum": [
+        "archive",
+        "source",
+        "layout",
+        "version",
+        "native",
+        "gdscript",
+        "editor",
+        "runtime",
+        "export",
+        "engine",
+        "platform",
+        "security",
+        "tester",
+        "upstream"
+      ],
+      "title": "FindingCategory",
+      "type": "string"
+    },
+    "FindingSeverity": {
+      "enum": [
+        "info",
+        "warning",
+        "error",
+        "critical"
+      ],
+      "title": "FindingSeverity",
+      "type": "string"
+    },
     "NativeLibrary": {
       "additionalProperties": false,
       "properties": {
@@ -136,6 +289,21 @@
         "unknown"
       ],
       "title": "PackageKind",
+      "type": "string"
+    },
+    "PhaseName": {
+      "enum": [
+        "doctor",
+        "import",
+        "parse",
+        "dotnet",
+        "editor",
+        "runtime",
+        "gui",
+        "export",
+        "control"
+      ],
+      "title": "PhaseName",
       "type": "string"
     },
     "VersionEvidence": {
@@ -290,6 +458,13 @@
         "type": "string"
       },
       "title": "Entry Scripts",
+      "type": "array"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "title": "Findings",
       "type": "array"
     },
     "gdextension_manifests": {
