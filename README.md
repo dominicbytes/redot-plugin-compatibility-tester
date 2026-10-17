@@ -157,7 +157,7 @@ MIT. Redot and Godot API reference snapshots live in `docs/gamedev/references/`;
 
 ## Notes
 
-I vibe coded this in GPT Sol 5.6. Use at your own risk. Actual programmers are welcome to submit PR's and feedback.
+I vibe coded this in GPT Sol 5.6, Sol 6.1, and Claude Opus 5.5. Use at your own risk. Actual programmers are welcome to submit PR's and feedback.
 
 ## About Dominic Bytes
 
