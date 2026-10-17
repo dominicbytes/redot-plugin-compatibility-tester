@@ -54,6 +54,8 @@ def test_phase_failures_map_to_scoped_port_status() -> None:
 
     assert editor.status is CompatibilityStatus.PORT_REQUIRED_EDITOR_API
     assert runtime.status is CompatibilityStatus.PORT_REQUIRED_RUNTIME_API
+    assert not editor.port_candidate
+    assert not runtime.port_candidate
 
 
 def test_all_selected_redot_phases_pass() -> None:
@@ -158,3 +160,114 @@ def test_exact_control_pass_makes_redot_terminal_failure_a_port_candidate(
     assert decision.status in {CompatibilityStatus.TIMEOUT, CompatibilityStatus.CRASHED}
     assert decision.confidence.value == "high"
     assert decision.port_candidate is True
+
+
+@pytest.mark.parametrize(
+    "code,action",
+    [
+        ("HARNESS_EVENT_UNAUTHENTICATED", "REVIEW_PACKAGE_TAMPERING"),
+        ("LOG_TRUNCATED", "RAISE_LOG_LIMIT"),
+    ],
+)
+def test_untrustworthy_evidence_prevents_port_advice(code: str, action: str) -> None:
+    phase = _phase(PhaseName.RUNTIME, PhaseStatus.FAIL)
+    phase.findings.append(
+        Finding(
+            code=code,
+            severity=FindingSeverity.CRITICAL,
+            category=FindingCategory.SECURITY,
+            message="Evidence is not complete and authentic.",
+        )
+    )
+    decision = classify(
+        ClassificationContext(
+            inventory=PluginInventory(package_kind=PackageKind.GDSCRIPT),
+            phases=[phase],
+        )
+    )
+    assert decision.status is CompatibilityStatus.INCONCLUSIVE
+    assert decision.confidence.value == "high"
+    assert not decision.port_candidate
+    assert decision.action.code == action
+
+
+@pytest.mark.parametrize(
+    "control",
+    [
+        PhaseStatus.MISSING_CAPABILITY,
+        PhaseStatus.CRASH,
+        PhaseStatus.TIMEOUT,
+        PhaseStatus.TESTER_ERROR,
+    ],
+)
+@pytest.mark.parametrize("redot", [PhaseStatus.PASS, PhaseStatus.FAIL, PhaseStatus.CRASH])
+def test_control_infrastructure_failure_is_inconclusive(
+    redot: PhaseStatus, control: PhaseStatus
+) -> None:
+    decision = classify(
+        ClassificationContext(
+            inventory=PluginInventory(package_kind=PackageKind.GDSCRIPT),
+            exact_control=True,
+            phases=[
+                _phase(PhaseName.EDITOR, redot),
+                _phase(PhaseName.EDITOR, control, EngineRole.GODOT_CONTROL),
+            ],
+        )
+    )
+    assert decision.status is CompatibilityStatus.INCONCLUSIVE
+    assert not decision.port_candidate
+
+
+def test_actual_redot_only_failure_is_a_port_candidate() -> None:
+    decision = classify(
+        ClassificationContext(
+            inventory=PluginInventory(package_kind=PackageKind.GDSCRIPT),
+            exact_control=True,
+            phases=[
+                _phase(PhaseName.EDITOR, PhaseStatus.FAIL),
+                _phase(PhaseName.EDITOR, PhaseStatus.PASS, EngineRole.GODOT_CONTROL),
+            ],
+        )
+    )
+    assert decision.port_candidate
+    assert decision.confidence.value == "high"
+
+
+@pytest.mark.parametrize("additional_failure", [False, True])
+@pytest.mark.parametrize("role", [EngineRole.REDOT, EngineRole.GODOT_CONTROL])
+def test_intermittent_shutdown_warning_limits_confidence(
+    role: EngineRole, additional_failure: bool
+) -> None:
+    redot = _phase(PhaseName.EDITOR, PhaseStatus.PASS)
+    control = _phase(PhaseName.EDITOR, PhaseStatus.PASS, EngineRole.GODOT_CONTROL)
+    phase = redot if role is EngineRole.REDOT else control
+    phase.findings = [
+        Finding(
+            code="ENGINE_INTERMITTENT_SHUTDOWN_CRASH",
+            severity=FindingSeverity.WARNING,
+            category=FindingCategory.ENGINE,
+            message="intermittent post-pass shutdown crash",
+        )
+    ]
+    phases = [redot, control]
+    if additional_failure:
+        phases.extend(
+            [
+                _phase(PhaseName.RUNTIME, PhaseStatus.FAIL),
+                _phase(PhaseName.RUNTIME, PhaseStatus.PASS, EngineRole.GODOT_CONTROL),
+            ]
+        )
+    decision = classify(
+        ClassificationContext(
+            inventory=PluginInventory(package_kind=PackageKind.GDSCRIPT),
+            phases=phases,
+            exact_control=True,
+        )
+    )
+    assert decision.status is (
+        CompatibilityStatus.PORT_REQUIRED_RUNTIME_API
+        if additional_failure
+        else CompatibilityStatus.COMPATIBLE_UNCHANGED
+    )
+    assert decision.confidence.value == "medium"
+    assert any("intermittent" in reason.lower() for reason in decision.confidence_reasons)

@@ -24,11 +24,14 @@ from redot_compat.models import (
 from redot_compat.runner.environment import build_isolated_environment
 from redot_compat.sources.local import acquire_local_source
 from redot_compat.testing.host import run_host_phase
-from redot_compat.testing.service import test_source
+from redot_compat.testing.service import run_compatibility_test
 
 ROOT = Path(__file__).resolve().parents[2]
 ORACLE = json.loads((ROOT / "tests/gauntlet/oracles/G-05.json").read_text(encoding="utf-8"))
-REDOT_SHA256 = "5633d02a28a73514084df6a60ffe01fabdbbb9ac5e28fdfd590ed47277f51989"
+REDOT_SHA256 = {
+    "5633d02a28a73514084df6a60ffe01fabdbbb9ac5e28fdfd590ed47277f51989",  # 26.2 console
+    "40072f7bca52bb5d663157241116b5c089a3bc7675ba6779d8a92e687643b2e0",  # 26.3 LLVM console
+}
 GODOT_SHA256 = "446e08f71624052572f96de9031850ba96382ce6752adde38bb955b0a49bed01"
 
 
@@ -137,7 +140,7 @@ def test_g05_exact_control_real_api_gap(request: pytest.FixtureRequest, tmp_path
 
     redot_doctor = doctor_engine(redot, product_hint="redot")
     godot_doctor = doctor_engine(godot, product_hint="godot")
-    assert redot_doctor.engine.binary_sha256.casefold() == REDOT_SHA256
+    assert redot_doctor.engine.binary_sha256.casefold() in REDOT_SHA256
     assert godot_doctor.engine.binary_sha256.casefold() == GODOT_SHA256
     assert redot_doctor.engine.compatibility_version == "4.5.2"
     assert godot_doctor.engine.compatibility_version == "4.5.2"
@@ -169,7 +172,7 @@ def test_g05_service_runs_matched_exact_control(
     redot = _option(request, "--integration-redot")
     godot = _option(request, "--integration-godot-control")
     fixture = ROOT / ORACLE["plugin_fixture"]
-    result = test_source(
+    result = run_compatibility_test(
         str(fixture),
         tmp_path / "service-result",
         redot=redot,
@@ -184,7 +187,13 @@ def test_g05_service_runs_matched_exact_control(
     expected = ORACLE["service_expected"]
     assert result.source.archive_sha256 == ORACLE["plugin_fixture_sha256"]
     assert result.classification.value == expected["classification"]
-    assert result.confidence.value == expected["confidence"]
+    reviewed_crash = any(
+        f.code in {"ENGINE_INTERMITTENT_SHUTDOWN_CRASH", "ENGINE_SHUTDOWN_CRASH_RETRY_EXHAUSTED"}
+        for f in result.findings
+    )
+    assert result.confidence.value == ("medium" if reviewed_crash else expected["confidence"])
+    if reviewed_crash:
+        assert result.phase_retry_attempts
     assert result.control_run_available is expected["control_run_available"]
     assert result.godot_control_engine is not None
     assert result.godot_control_engine.binary_sha256.casefold() == GODOT_SHA256
@@ -215,7 +224,7 @@ def test_g05_service_passes_under_both_exact_engines(
     redot = _option(request, "--integration-redot")
     godot = _option(request, "--integration-godot-control")
     fixture = ROOT / ORACLE["pass_fixture"]
-    result = test_source(
+    result = run_compatibility_test(
         str(fixture),
         tmp_path / "pass-result",
         redot=redot,
@@ -230,7 +239,17 @@ def test_g05_service_passes_under_both_exact_engines(
     expected = ORACLE["pass_expected"]
     assert result.source.archive_sha256 == ORACLE["pass_fixture_sha256"]
     assert result.classification.value == expected["classification"]
-    assert result.confidence.value == expected["confidence"]
+    intermittent = any(
+        f.code in {"ENGINE_INTERMITTENT_SHUTDOWN_CRASH", "ENGINE_SHUTDOWN_CRASH_RETRY_EXHAUSTED"}
+        for f in result.findings
+    )
+    assert result.confidence.value == ("medium" if intermittent else expected["confidence"])
+    if intermittent:
+        assert result.phase_retry_attempts
+        assert any(
+            "intermittent post-pass shutdown crash" in note or "Shutdown stability remains" in note
+            for note in result.limitations
+        )
     assert result.port_candidate is expected["port_candidate"]
     assert all(phase.status is PhaseStatus.PASS for phase in result.phases)
     assert len(result.phases) == 6
@@ -277,6 +296,15 @@ def test_g05_complete_classification_matrix() -> None:
             True,
         ),
     ]
+    rows.extend(
+        (PhaseStatus.FAIL, control_status, CompatibilityStatus.INCONCLUSIVE, False)
+        for control_status in (
+            PhaseStatus.MISSING_CAPABILITY,
+            PhaseStatus.TIMEOUT,
+            PhaseStatus.CRASH,
+            PhaseStatus.TESTER_ERROR,
+        )
+    )
     for redot_status, control_status, expected_status, port_candidate in rows:
         decision = classify(
             ClassificationContext(

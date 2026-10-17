@@ -1,51 +1,55 @@
 extends SceneTree
 
 const SENTINEL_PREFIX: String = "REDOT_COMPAT_EVENT "
-const DEFAULT_RUN_ID: String = "unconfigured-run"
 
 var _sequence: int = 0
-var _run_id: String = DEFAULT_RUN_ID
+var _run_id: String = "unconfigured-run"
+var _session_key: String = ""
 
 
 func _initialize() -> void:
-	_run_id = OS.get_environment("REDOT_COMPAT_RUN_ID")
-	if _run_id.is_empty():
-		_run_id = DEFAULT_RUN_ID
+	var config: Dictionary = _read_config()
 	_emit_event("start", {"harness": "runtime"})
-	var config_path: String = OS.get_environment("REDOT_COMPAT_HARNESS_JSON")
-	var config: Dictionary = {}
-	if not config_path.is_empty():
-		config = _read_config(config_path)
-		if config.is_empty():
-			_emit_event("error", {"reason": "invalid_harness_config"})
-			quit(2)
-			return
-	var probes_value: Variant = config.get("probes", [])
-	if not probes_value is Array:
-		_emit_event("error", {"reason": "probes_must_be_array"})
+	if config.is_empty():
+		_emit_event("error", {"reason": "invalid_harness_config"})
 		quit(2)
 		return
+	var probes: Array = config.get("probes", [])
+	if config.get("mode") == "canary":
+		probes = []
 	var passed: bool = true
-	for probe_value: Variant in probes_value:
+	for probe_value: Variant in probes:
 		if not probe_value is Dictionary:
-			passed = false
-			_emit_event("probe", {"passed": false, "reason": "probe_must_be_object"})
-			continue
+			_emit_event("error", {"reason": "probe_must_be_object"})
+			quit(2)
+			return
 		var probe: Dictionary = probe_value as Dictionary
 		var probe_passed: bool = _run_probe(probe)
 		passed = passed and probe_passed
 		_emit_event("probe", {"type": probe.get("type", ""), "passed": probe_passed})
-	_emit_event("pass" if passed else "fail", {"probe_count": probes_value.size()})
+	_emit_event("pass" if passed else "fail", {"probe_count": probes.size()})
 	quit(0 if passed else 1)
 
 
-func _read_config(path: String) -> Dictionary:
-	if not FileAccess.file_exists(path):
+func _read_config() -> Dictionary:
+	var path: String = OS.get_environment("REDOT_COMPAT_HARNESS_JSON")
+	if path.is_empty() or not FileAccess.file_exists(path):
 		return {}
-	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	var text: String = FileAccess.get_file_as_string(path)
+	DirAccess.remove_absolute(path)
+	var parsed: Variant = JSON.parse_string(text)
 	if not parsed is Dictionary:
 		return {}
-	return parsed as Dictionary
+	var config: Dictionary = parsed as Dictionary
+	_run_id = str(config.get("run_id", "unconfigured-run"))
+	_session_key = str(config.get("session_key", ""))
+	if _session_key.length() != 64 or _session_key.hex_decode().size() != 32:
+		return {}
+	if not config.get("probes") is Array:
+		return {}
+	if not str(config.get("mode", "")) in ["import", "activate", "canary"]:
+		return {}
+	return config
 
 
 func _run_probe(probe: Dictionary) -> bool:
@@ -67,11 +71,15 @@ func _run_probe(probe: Dictionary) -> bool:
 
 func _emit_event(event_name: String, payload: Dictionary) -> void:
 	var event: Dictionary = {
-		"schema": 1,
+		"schema": 2,
 		"run_id": _run_id,
 		"sequence": _sequence,
 		"event": event_name,
 		"payload": payload,
 	}
 	_sequence += 1
-	print(SENTINEL_PREFIX + JSON.stringify(event))
+	var body: String = JSON.stringify(event)
+	var signature: String = Crypto.new().hmac_digest(
+		HashingContext.HASH_SHA256, _session_key.hex_decode(), body.to_utf8_buffer()
+	).hex_encode()
+	print(SENTINEL_PREFIX + signature + " " + body)

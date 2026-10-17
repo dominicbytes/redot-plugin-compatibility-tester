@@ -67,3 +67,48 @@ def redact_text(value: str, *, secrets: Iterable[str] = ()) -> str:
     for secret in sorted((item for item in secrets if item), key=len, reverse=True):
         result = result.replace(secret, REDACTED)
     return result
+
+
+class StreamRedactor:
+    """Redact known secret values from text that arrives in arbitrary chunks.
+
+    Any trailing text that could still be the beginning of a secret is held back
+    until more input arrives (or the stream is flushed), so a secret split across
+    chunk boundaries is still replaced as a whole.
+    """
+
+    def __init__(self, secrets: Iterable[str] = ()) -> None:
+        self._secrets = tuple(sorted({item for item in secrets if item}, key=len, reverse=True))
+        self._pattern = (
+            re.compile("|".join(re.escape(item) for item in self._secrets))
+            if self._secrets
+            else None
+        )
+        self._tail_length = max((len(item) for item in self._secrets), default=1) - 1
+        self._pending = ""
+
+    def feed(self, text: str) -> str:
+        if self._pattern is None:
+            return text
+        self._pending += text
+        safe_end = max(0, len(self._pending) - self._tail_length)
+        position = 0
+        output: list[str] = []
+        for match in self._pattern.finditer(self._pending):
+            if match.start() >= safe_end:
+                break
+            output.extend((self._pending[position : match.start()], REDACTED))
+            position = match.end()
+        end = max(position, safe_end)
+        output.append(self._pending[position:end])
+        self._pending = self._pending[end:]
+        return "".join(output)
+
+    def flush(self) -> str:
+        remaining = (
+            self._pattern.sub(lambda _: REDACTED, self._pending)
+            if self._pattern is not None
+            else self._pending
+        )
+        self._pending = ""
+        return remaining

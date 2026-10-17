@@ -17,13 +17,13 @@ class SourceResolutionError(RedotCompatError):
     """Raised when a source cannot be resolved to immutable evidence."""
 
 
-class CapabilityError(RedotCompatError):
-    """Raised when an explicitly required runtime capability is unavailable."""
-
-
 class EngineError(RedotCompatError):
     """Raised when an engine cannot be identified or fails a bounded doctor check."""
 
 
 class HarnessProtocolError(RedotCompatError):
     """Raised when harness output cannot prove one ordered terminal result."""
+
+
+class WorkerOutputError(RedotCompatError):
+    """Raised when a file written by the untrusted worker violates read policy."""

@@ -49,3 +49,25 @@ def test_local_archive_is_safely_extracted(tmp_path: Path) -> None:
 
     assert (resolved.content_root / "addons/example/plugin.cfg").exists()
     assert resolved.provenance.source_kind.value == "local_archive"
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows junctions only")
+def test_local_directory_rejects_junctions(tmp_path: Path) -> None:
+    import subprocess
+
+    source = tmp_path / "source"
+    source.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    junction = source / "junction"
+    created = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)], capture_output=True, check=False
+    )
+    if created.returncode or not junction.is_junction():
+        pytest.skip("junction creation is unavailable")
+    try:
+        with pytest.raises(SourceResolutionError, match="symbolic link"):
+            acquire_local_source(source, tmp_path / "run")
+        assert not (tmp_path / "run/source").exists()
+    finally:
+        junction.rmdir()

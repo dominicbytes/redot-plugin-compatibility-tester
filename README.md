@@ -9,7 +9,11 @@
 
 This repository is an alpha implementation prepared for `dominicbytes/redot-plugin-compatibility-tester`. Safe static inspection, a hardened Linux worker, bounded trusted-host phases, deterministic Redot/API evidence, an optional exact Godot 4.5.2 control, declarative probes, classification/reports, and resumable static batches are implemented. The full export/native/platform matrix and version 1.0 audit remain future work.
 
-The project baseline is Godot `4.5.2`. `NO_PORT_NEEDED_BASELINE_POLICY` means authoritative evidence places the target at or below that baseline and dynamic testing was skipped by policy. It **does not prove runtime compatibility**.
+Supported Redot versions are **26.2 and 26.3**. Both are built on Godot **4.5.2**, as reported by their extension API headers, so `4.5.2` is the compatibility baseline. Godot 4.x plugins targeting <= 4.5.2 with good authoritative evidence need no port by policy. Godot 3.x plugins always need a major upgrade; C# plugins need `Redot.NET.Sdk`.
+
+Compared with 26.2, Redot 26.3 adds `Variant.TYPE_STRUCT` (`TYPE_MAX` changes from 39 to 40) and classes including `WorldScape3D*`, `Mode7Sprite2D`, and `Struct`. The official 26.3 headless-shutdown crash is attributed to the engine using an engine-only canary run, rather than blamed on the plugin.
+
+`NO_PORT_NEEDED_BASELINE_POLICY` means authoritative evidence places the target at or below that baseline and dynamic testing was skipped by policy. It **does not prove runtime compatibility**.
 
 ## Architecture
 
@@ -20,6 +24,15 @@ source -> immutable provenance -> safe extraction -> static inventory
 ```
 
 Python owns acquisition, policy, process control, and reporting. Tiny typed GDScript harnesses perform only generated engine-context probes. `result.json` is authoritative.
+
+## Install
+
+Install the CLI directly from GitHub with either tool:
+
+```console
+uv tool install git+https://github.com/dominicbytes/redot-plugin-compatibility-tester
+pipx install git+https://github.com/dominicbytes/redot-plugin-compatibility-tester
+```
 
 ## Install for development
 
@@ -36,7 +49,7 @@ Run the quality gate:
 ```console
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy src
+uv run mypy src scripts
 uv run pytest -q
 ```
 
@@ -47,6 +60,20 @@ uv run redot-compat inspect ./path/to/plugin --output ./reports/example
 ```
 
 The command never imports Python modules from the package, loads native libraries, invokes Redot, or runs plugin scripts. See [classifications](docs/classifications.md), [security](SECURITY.md), and [troubleshooting](docs/troubleshooting.md).
+
+## Example output
+
+Abbreviated `report.md` conclusion from static inspection of `tests/fixtures/baseline_gdscript_pass`:
+
+```markdown
+## Conclusion
+
+- Classification: `NO_PORT_NEEDED_BASELINE_POLICY`
+- Port candidate: `false`
+- Confidence: `high`
+- Policy: Policy skip (not a runtime compatibility test)
+- Next action: `NONE_BASELINE_POLICY` — No port is requested by policy; use a gated dynamic run for behavioral proof.
+```
 
 ## Dynamic testing
 
@@ -101,7 +128,7 @@ Generate Redot and exact-version Godot control snapshots from isolated state bef
 
 ## Sources and batches
 
-Local directories and archives are the first source forms. HTTPS, GitHub, and Codeberg adapters resolve immutable identities before caching bytes. Marketplace metadata remains corroborating evidence.
+Local directories and archives are the first source forms. HTTPS, GitHub, and Codeberg adapters resolve immutable identities before caching bytes. Marketplace metadata remains corroborating evidence. GitHub and Codeberg adapters read `GITHUB_TOKEN` and `CODEBERG_TOKEN` environment variables, respectively, or credentials supplied through `--config`.
 
 ```console
 uv run redot-compat inspect https://github.com/owner/repository --ref v1.2.3
@@ -109,6 +136,8 @@ uv run redot-compat batch examples/plugins.toml
 ```
 
 Each completed inspection writes `result.json` (authoritative), `report.md`, `codex_port_brief.md`, `reproduce.ps1`, and `reproduce.sh`. Dynamic results also embed a portable JSON probe manifest.
+
+Exit code `2` indicates a usage or configuration error.
 
 ## GitHub repository preparation
 
@@ -124,7 +153,7 @@ The repository includes an MIT license, community files, pinned read-only qualit
 
 ## License
 
-MIT. The bundled Redot and Godot API snapshots retain their upstream attribution and licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
+MIT. Redot and Godot API reference snapshots live in `docs/gamedev/references/`; they are not shipped in the wheel. They retain their upstream attribution and licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
 
 ## Notes
 

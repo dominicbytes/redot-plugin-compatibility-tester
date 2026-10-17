@@ -22,6 +22,7 @@
         "PORT_REQUIRED_NATIVE_SOURCE",
         "PORT_REQUIRED_RUST_BINDINGS",
         "PORT_REQUIRED_ENGINE_MODULE",
+        "PORT_REQUIRED_MAJOR_UPGRADE",
         "PORT_REQUIRED_EXPORT_PACKAGING",
         "ENGINE_API_GAP",
         "INVALID_PACKAGE",
@@ -769,6 +770,13 @@
           "title": "Entry Scripts",
           "type": "array"
         },
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "title": "Findings",
+          "type": "array"
+        },
         "gdextension_manifests": {
           "items": {
             "type": "string"
@@ -1220,6 +1228,13 @@
       "title": "Created At",
       "type": "string"
     },
+    "engine_canary_phases": {
+      "items": {
+        "$ref": "#/$defs/PhaseResult"
+      },
+      "title": "Engine Canary Phases",
+      "type": "array"
+    },
     "findings": {
       "items": {
         "$ref": "#/$defs/Finding"
@@ -1246,6 +1261,13 @@
         "type": "string"
       },
       "title": "Limitations",
+      "type": "array"
+    },
+    "phase_retry_attempts": {
+      "items": {
+        "$ref": "#/$defs/PhaseResult"
+      },
+      "title": "Phase Retry Attempts",
       "type": "array"
     },
     "phases": {
@@ -1295,7 +1317,7 @@
       "type": "string"
     },
     "schema_version": {
-      "default": "1.0.0",
+      "default": "1.1.0",
       "title": "Schema Version",
       "type": "string"
     },
