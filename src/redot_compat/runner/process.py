@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import codecs
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -14,8 +16,17 @@ import psutil
 from pydantic import Field
 
 from redot_compat.models.base import ContractModel
-from redot_compat.runner.redaction import REDACTED, redact_args, redact_environment, redact_text
+from redot_compat.runner.redaction import (
+    REDACTED,
+    StreamRedactor,
+    redact_args,
+    redact_environment,
+)
 from redot_compat.runner.windows_job import WindowsJob, launch_in_windows_job
+
+_READ_CHUNK_BYTES = 4096
+_POSIX_TERM_GRACE_SECONDS = 2.0
+_POSIX_SURVIVOR_GRACE_SECONDS = 0.5
 
 
 class ProcessResult(ContractModel):
@@ -33,6 +44,7 @@ class ProcessResult(ContractModel):
     stdout_truncated: bool = False
     stderr_truncated: bool = False
     combined_truncated: bool = False
+    output_quota_exceeded: bool = False
 
 
 class _BoundedWriter:
@@ -90,6 +102,7 @@ def run_process(
     process: subprocess.Popen[bytes] | None = None
     windows_job: WindowsJob | None = None
     timed_out = False
+    posix_group_cleaned = False
     try:
         if os.name == "nt":
             process, windows_job = launch_in_windows_job(
@@ -131,6 +144,13 @@ def run_process(
             if windows_job is not None:
                 windows_job.close()
             _terminate_owned_tree(process)
+            posix_group_cleaned = os.name != "nt"
+        else:
+            if os.name != "nt":
+                # The root exited normally; descendants left in its process group
+                # would otherwise linger as orphans holding the output pipes.
+                _kill_posix_group_survivors(process.pid)
+                posix_group_cleaned = True
         for thread in threads:
             thread.join(timeout=5)
         if process.poll() is None:
@@ -138,6 +158,11 @@ def run_process(
     finally:
         if windows_job is not None:
             windows_job.close()
+        if os.name != "nt" and process is not None and not posix_group_cleaned:
+            if process.poll() is None:
+                _terminate_owned_tree(process)
+            else:
+                _kill_posix_group_survivors(process.pid)
         stdout_writer.close()
         stderr_writer.close()
         combined_writer.close()
@@ -168,22 +193,30 @@ def _drain(
     label: str,
     secrets: tuple[str, ...],
 ) -> None:
-    while chunk := stream.read(4096):
-        text = chunk.decode("utf-8", errors="replace")
-        safe = redact_text(text, secrets=secrets).encode("utf-8")
-        writer.write(safe)
-        timestamp = datetime.now(UTC).isoformat(timespec="milliseconds")
-        combined.write(f"{timestamp} [{label}] ".encode() + safe)
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    redactor = StreamRedactor(secrets)
+    while chunk := os.read(stream.fileno(), _READ_CHUNK_BYTES):
+        _emit(redactor.feed(decoder.decode(chunk)), writer, combined, label)
+    _emit(
+        redactor.feed(decoder.decode(b"", final=True)) + redactor.flush(), writer, combined, label
+    )
+
+
+def _emit(text: str, writer: _BoundedWriter, combined: _BoundedWriter, label: str) -> None:
+    if not text:
+        return
+    safe = text.encode("utf-8")
+    writer.write(safe)
+    timestamp = datetime.now(UTC).isoformat(timespec="milliseconds")
+    combined.write(f"{timestamp} [{label}] ".encode() + safe)
 
 
 def _terminate_owned_tree(process: subprocess.Popen[bytes]) -> None:
+    if os.name != "nt":
+        _terminate_posix_group(process)
+        return
     if process.poll() is not None:
         return
-    if os.name != "nt":
-        try:
-            os.kill(-process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
     try:
         root = psutil.Process(process.pid)
         owned = root.children(recursive=True)
@@ -201,3 +234,95 @@ def _terminate_owned_tree(process: subprocess.Popen[bytes]) -> None:
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=2)
+
+
+def _terminate_posix_group(process: subprocess.Popen[bytes]) -> None:
+    """SIGTERM the owned session/process group, then SIGKILL it unconditionally.
+
+    ``start_new_session=True`` makes the root PID the group ID, and that ID stays
+    reserved while any member is alive, so signalling the group still reaches
+    descendants after the root has exited and they were reparented. psutil
+    descendants of a still-running root are signalled as well to cover members
+    that moved to another session.
+    """
+    if sys.platform == "win32":
+        raise RuntimeError("POSIX process groups are unavailable on Windows")
+    else:
+        pgid = process.pid
+        escaped = _snapshot_descendants(process)
+        _signal_group(pgid, signal.SIGTERM)
+        for item in escaped:
+            _signal_psutil(item, signal.SIGTERM)
+        _wait_for_group_exit(pgid, process, _POSIX_TERM_GRACE_SECONDS)
+        _signal_group(pgid, signal.SIGKILL)
+        for item in escaped:
+            _signal_psutil(item, signal.SIGKILL)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+
+
+def _kill_posix_group_survivors(pgid: int) -> None:
+    if sys.platform == "win32":
+        raise RuntimeError("POSIX process groups are unavailable on Windows")
+    else:
+        if not _group_exists(pgid):
+            return
+        _signal_group(pgid, signal.SIGTERM)
+        _wait_for_group_exit(pgid, None, _POSIX_SURVIVOR_GRACE_SECONDS)
+        _signal_group(pgid, signal.SIGKILL)
+
+
+def _snapshot_descendants(process: subprocess.Popen[bytes]) -> list[psutil.Process]:
+    if process.poll() is not None:
+        return []
+    try:
+        return psutil.Process(process.pid).children(recursive=True)
+    except psutil.Error:
+        return []
+
+
+def _signal_psutil(item: psutil.Process, signum: int) -> None:
+    try:
+        item.send_signal(signum)
+    except psutil.Error:
+        pass
+
+
+def _signal_group(pgid: int, signum: int) -> None:
+    if sys.platform == "win32":
+        raise RuntimeError("POSIX process groups are unavailable on Windows")
+    else:
+        try:
+            os.killpg(pgid, signum)
+        except ProcessLookupError:
+            pass
+
+
+def _group_exists(pgid: int) -> bool:
+    if sys.platform == "win32":
+        raise RuntimeError("POSIX process groups are unavailable on Windows")
+    else:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+
+def _wait_for_group_exit(
+    pgid: int,
+    process: subprocess.Popen[bytes] | None,
+    grace_seconds: float,
+) -> None:
+    deadline = time.monotonic() + grace_seconds
+    while time.monotonic() < deadline:
+        if process is not None:
+            process.poll()
+        if not _group_exists(pgid):
+            return
+        time.sleep(0.05)

@@ -5,6 +5,10 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from packaging.version import Version
+
+from redot_compat.config import ArchiveLimits
+from redot_compat.constants import BASELINE_VERSION
 from redot_compat.errors import UnsafeArchiveError
 from redot_compat.inspect.baseline import apply_baseline_policy
 from redot_compat.inspect.inventory import inspect_plugin
@@ -20,6 +24,7 @@ from redot_compat.models import (
     PluginInventory,
     PolicyResult,
     RecommendedAction,
+    VersionMeaning,
 )
 from redot_compat.reports import write_reports
 from redot_compat.sources.base import ResolvedArtifact
@@ -38,6 +43,9 @@ def inspect_source(
     asset_pattern: str | None = None,
     plugin_id: str | None = None,
     force_test_baseline: bool = False,
+    archive_limits: ArchiveLimits | None = None,
+    github_token: str | None = None,
+    codeberg_token: str | None = None,
 ) -> CompatibilityResult:
     output = output.resolve()
     if output.exists() and any(output.iterdir()):
@@ -51,6 +59,9 @@ def inspect_source(
             requested_ref=requested_ref,
             release=release,
             asset_pattern=asset_pattern,
+            archive_limits=archive_limits,
+            github_token=github_token,
+            codeberg_token=codeberg_token,
         )
     except UnsafeArchiveError as exc:
         local = Path(source)
@@ -75,19 +86,24 @@ def _acquire(
     requested_ref: str | None,
     release: str | None,
     asset_pattern: str | None,
+    archive_limits: ArchiveLimits | None = None,
+    github_token: str | None = None,
+    codeberg_token: str | None = None,
 ) -> ResolvedArtifact:
     local = Path(source)
     if local.exists():
         if requested_ref or release or asset_pattern:
             raise ValueError("local sources do not accept --ref, --release, or --asset")
-        return acquire_local_source(local, run_dir)
+        return acquire_local_source(local, run_dir, limits=archive_limits)
     parsed = urlsplit(source)
     if parsed.scheme != "https":
         raise ValueError("source must be an existing local path or supported HTTPS repository URL")
     if parsed.hostname == "github.com":
-        adapter: GitHubSource | CodebergSource | HttpArchiveSource = GitHubSource()
+        adapter: GitHubSource | CodebergSource | HttpArchiveSource = GitHubSource(
+            token=github_token
+        )
     elif parsed.hostname == "codeberg.org":
-        adapter = CodebergSource()
+        adapter = CodebergSource(token=codeberg_token)
     else:
         adapter = HttpArchiveSource()
     try:
@@ -98,10 +114,11 @@ def _acquire(
                 requested_ref=requested_ref,
                 release=release,
                 asset_pattern=asset_pattern,
+                limits=archive_limits,
             )
         if release or asset_pattern:
             raise ValueError("direct HTTPS archives do not accept --release or --asset")
-        return adapter.acquire(source, run_dir, requested_ref=requested_ref)
+        return adapter.acquire(source, run_dir, requested_ref=requested_ref, limits=archive_limits)
     finally:
         adapter.close()
 
@@ -114,11 +131,42 @@ def _classify_static(
     *,
     plugin_id: str | None,
 ) -> CompatibilityResult:
-    findings: list[Finding] = []
+    findings = list(inventory.findings)
+    for item in inventory.version_evidence:
+        if item.source_type == "dotnet_sdk":
+            findings.append(
+                Finding(
+                    code="DOTNET_GODOT_SDK",
+                    severity=FindingSeverity.WARNING,
+                    category=FindingCategory.VERSION,
+                    file=item.source_path_or_url,
+                    message="Godot.NET.Sdk is not Redot's .NET SDK.",
+                    recommendation="Replace Godot.NET.Sdk with Redot.NET.Sdk/26.x.",
+                )
+            )
+    maximum_below_baseline = any(
+        item.meaning is VersionMeaning.DECLARED_MAXIMUM
+        and item.confidence in {Confidence.HIGH, Confidence.MEDIUM}
+        and item.normalized_version
+        and Version(item.normalized_version) < Version(policy.baseline_version)
+        for item in inventory.version_evidence
+    )
     limitations = [
         "Static inspection does not prove activation, runtime, export, or platform parity."
     ]
-    if not inventory.plugin_roots and inventory.package_kind is PackageKind.UNKNOWN:
+    if plugin_id and not inventory.plugin_roots:
+        classification = CompatibilityStatus.INVALID_PACKAGE
+        confidence = Confidence.HIGH
+        port_candidate = False
+        action = RecommendedAction(
+            code="SELECT_VALID_PLUGIN_ID",
+            text="Choose a plugin ID present in this package.",
+        )
+    elif (
+        not inventory.plugin_roots
+        and inventory.package_kind is PackageKind.UNKNOWN
+        and inventory.effective_api_target is None
+    ):
         classification = CompatibilityStatus.INVALID_PACKAGE
         confidence = Confidence.HIGH
         port_candidate = False
@@ -150,6 +198,30 @@ def _classify_static(
                 message="Multiple independent plugin roots require an explicit selection.",
             )
         )
+    elif inventory.effective_api_target and Version(inventory.effective_api_target).major < 4:
+        classification = CompatibilityStatus.PORT_REQUIRED_MAJOR_UPGRADE
+        confidence = inventory.effective_api_confidence
+        port_candidate = True
+        action = RecommendedAction(
+            code="PORT_GODOT3_TO_4",
+            text="Port Godot 3 APIs and resources to Redot's Godot 4 lineage.",
+        )
+    elif maximum_below_baseline:
+        classification = CompatibilityStatus.PORT_REQUIRED_NATIVE_REBUILD
+        confidence = Confidence.HIGH
+        port_candidate = True
+        action = RecommendedAction(
+            code="REBUILD_GDEXTENSION",
+            text="Rebuild the GDExtension for the Redot baseline.",
+        )
+        findings.append(
+            Finding(
+                code="GDEXTENSION_MAXIMUM_BELOW_BASELINE",
+                severity=FindingSeverity.ERROR,
+                category=FindingCategory.NATIVE,
+                message="GDExtension compatibility_maximum is below the Redot baseline.",
+            )
+        )
     elif policy.decision is BaselineDecision.SKIP:
         classification = CompatibilityStatus.NO_PORT_NEEDED_BASELINE_POLICY
         confidence = inventory.effective_api_confidence
@@ -163,7 +235,7 @@ def _classify_static(
         confidence = Confidence.HIGH
         port_candidate = True
         action = RecommendedAction(
-            code="BUILD_CUSTOM_REDOD_ENGINE",
+            code="BUILD_CUSTOM_REDOT_ENGINE",
             text="This package is an engine module and requires a custom Redot build.",
         )
     else:
@@ -205,7 +277,7 @@ def _classify_static(
         recommended_next_action=action,
         limitations=limitations,
         reproduction={
-            "command": _static_reproduction_command(artifact, plugin_id),
+            "command": _static_reproduction_command(artifact, plugin_id, policy),
             "source_sha256": artifact.content_sha256,
         },
     )
@@ -219,7 +291,7 @@ def _invalid_archive_result(
         source=local_file_provenance(source),
         inventory=PluginInventory(),
         policy=PolicyResult(
-            baseline_version="4.5.2",
+            baseline_version=BASELINE_VERSION,
             decision=BaselineDecision.UNKNOWN,
             reason="Unsafe or malformed input was rejected before inspection.",
         ),
@@ -253,7 +325,9 @@ def _confidence_reason(inventory: PluginInventory) -> str:
     return "No authoritative API target was found; the result is scope-limited."
 
 
-def _static_reproduction_command(artifact: ResolvedArtifact, plugin_id: str | None) -> list[str]:
+def _static_reproduction_command(
+    artifact: ResolvedArtifact, plugin_id: str | None, policy: PolicyResult | None = None
+) -> list[str]:
     source = artifact.provenance
     command = ["redot-compat", "inspect", source.requested_url_or_path]
     if source.resolved_commit:
@@ -264,6 +338,8 @@ def _static_reproduction_command(artifact: ResolvedArtifact, plugin_id: str | No
             command.extend(["--asset", source.release_asset_name])
     if plugin_id:
         command.extend(["--plugin-id", plugin_id])
+    if policy and policy.decision is BaselineDecision.FORCED_TEST:
+        command.append("--force-test-baseline")
     return command
 
 

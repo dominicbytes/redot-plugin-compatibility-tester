@@ -9,6 +9,7 @@ from redot_compat.models.enums import (
     PackageKind,
     VersionMeaning,
 )
+from redot_compat.models.finding import Finding
 
 
 class VersionEvidence(ContractModel):
@@ -36,6 +37,7 @@ class NativeLibrary(ContractModel):
 
 
 class PluginInventory(ContractModel):
+    findings: list[Finding] = Field(default_factory=list)
     plugin_roots: list[str] = Field(default_factory=list)
     plugin_ids: list[str] = Field(default_factory=list)
     package_kind: PackageKind = PackageKind.UNKNOWN

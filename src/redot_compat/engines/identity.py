@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from redot_compat.archive.hash import sha256_file
+from redot_compat.engines.lineage import godot_lineage_for_redot
 from redot_compat.models.engine import EngineIdentity
 
-_REDOT_COMPATIBILITY = {"26.2": "4.5.2"}
 _VERSION_PATTERN = re.compile(r"(?P<version>\d+\.\d+(?:\.\d+)?(?:[^\s]*)?)")
 
 
@@ -28,8 +28,7 @@ def parse_engine_version(output: str, *, product_hint: str) -> ParsedEngineVersi
     version = match.group("version").rstrip(".,;)")
     hint = product_hint.casefold()
     if hint == "redot":
-        release = ".".join(version.split(".")[:2])
-        return ParsedEngineVersion("Redot", version, _REDOT_COMPATIBILITY.get(release))
+        return ParsedEngineVersion("Redot", version, godot_lineage_for_redot(version))
     if hint == "godot":
         compatibility = ".".join(version.split(".")[:3])
         return ParsedEngineVersion("Godot", version, compatibility)

@@ -14,8 +14,11 @@ _RESERVED_WINDOWS_NAMES = {
     "PRN",
     "AUX",
     "NUL",
-    *(f"COM{index}" for index in range(1, 10)),
-    *(f"LPT{index}" for index in range(1, 10)),
+    "CONIN$",
+    "CONOUT$",
+    *(f"{prefix}{digit}" for prefix in ("COM", "LPT") for digit in "\u00b9\u00b2\u00b3"),
+    *(f"COM{index}" for index in range(10)),
+    *(f"LPT{index}" for index in range(10)),
 }
 
 
@@ -55,6 +58,8 @@ def normalize_member_path(name: str, limits: ArchiveLimits) -> PurePosixPath:
             raise UnsafeArchiveError(
                 f"archive member contains traversal or an empty component: {name!r}"
             )
+        if any(char in ':<>"|?*' or ord(char) < 32 or ord(char) == 127 for char in part):
+            raise UnsafeArchiveError(f"archive member contains a forbidden character: {name!r}")
         if part != part.strip() or part.endswith((".", " ")):
             raise UnsafeArchiveError(
                 f"archive member contains an ambiguous path component: {name!r}"
@@ -74,6 +79,12 @@ def validate_entries(
     if len(entries) > limits.max_entries:
         raise UnsafeArchiveError(f"archive contains more than {limits.max_entries} entries")
     seen: dict[str, str] = {}
+    files = {
+        unicodedata.normalize("NFC", entry.path.as_posix()).casefold()
+        for entry in entries
+        if not entry.is_directory
+    }
+    components: dict[str, str] = {}
     expanded = 0
     compressed = 0
     for entry in entries:
@@ -83,6 +94,14 @@ def validate_entries(
                 f"archive member collision: {seen[key]!r} and {entry.raw_name!r}"
             )
         seen[key] = entry.raw_name
+        for index in range(1, len(entry.path.parts) + 1):
+            prefix = "/".join(entry.path.parts[:index])
+            prefix_key = prefix.casefold()
+            if prefix_key in components and components[prefix_key] != prefix:
+                raise UnsafeArchiveError(f"archive path component collision: {prefix!r}")
+            components[prefix_key] = prefix
+            if index < len(entry.path.parts) and prefix_key in files:
+                raise UnsafeArchiveError(f"archive file/directory conflict: {prefix!r}")
         if entry.size < 0 or entry.compressed_size < 0:
             raise UnsafeArchiveError("archive member reports a negative size")
         if entry.size > limits.max_file_bytes:

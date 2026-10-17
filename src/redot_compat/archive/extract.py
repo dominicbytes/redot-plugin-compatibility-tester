@@ -25,6 +25,15 @@ def extract_archive(
     *,
     limits: ArchiveLimits | None = None,
 ) -> ArchiveSummary:
+    try:
+        return _extract_archive(archive_path, target, limits=limits)
+    except ValueError as exc:
+        raise UnsafeArchiveError("archive contains an invalid path or value") from exc
+
+
+def _extract_archive(
+    archive_path: Path, target: Path, *, limits: ArchiveLimits | None
+) -> ArchiveSummary:
     limits = limits or ArchiveLimits()
     archive_path = archive_path.resolve(strict=True)
     if archive_path.stat().st_size > limits.max_archive_bytes:
@@ -152,11 +161,14 @@ def _extract_tar(archive_path: Path, target: Path, limits: ArchiveLimits) -> Arc
 
 
 def _safe_destination(target: Path, relative: Path) -> Path:
-    target_resolved = target.resolve()
-    destination = (target / relative).resolve()
-    if os.path.commonpath((str(target_resolved), str(destination))) != str(target_resolved):
-        raise UnsafeArchiveError(f"archive destination escapes extraction root: {relative}")
-    return destination
+    try:
+        target_resolved = target.resolve()
+        destination = (target / relative).resolve()
+        if os.path.commonpath((str(target_resolved), str(destination))) != str(target_resolved):
+            raise UnsafeArchiveError(f"archive destination escapes extraction root: {relative}")
+        return destination
+    except (OSError, ValueError) as exc:
+        raise UnsafeArchiveError("invalid archive destination") from exc
 
 
 def _copy_limited(

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from packaging.version import InvalidVersion, Version
 
+from redot_compat.engines.lineage import godot_lineage_for_redot
 from redot_compat.inspect.parsing import get_case_insensitive, read_ini
 from redot_compat.models import (
     Confidence,
@@ -17,16 +18,51 @@ _VERSION = re.compile(r"(?<!\d)(\d+\.\d+(?:\.\d+)?)(?!\d)")
 _FEATURES = re.compile(r"config/features\s*=\s*PackedStringArray\((.*?)\)", re.DOTALL)
 _QUOTED = re.compile(r'["\']([^"\']+)["\']')
 _RUST_API = re.compile(r"api[-_]?(\d+)[-_](\d+)")
-_DOTNET_SDK = re.compile(r"Godot\.NET\.Sdk/([0-9]+(?:\.[0-9]+){1,2})", re.IGNORECASE)
+_DOTNET_SDK = re.compile(r"(Godot|Redot)\.NET\.Sdk/([0-9]+(?:\.[0-9]+){1,2})", re.IGNORECASE)
+_CONFIG_VERSION_3 = re.compile(r"^[ \t]*config_version\s*=\s*4\s*(?:[;#].*)?$", re.MULTILINE)
+_AUXILIARY_DIRS = {
+    ".github",
+    ".gitlab",
+    "tests",
+    "test",
+    "testing",
+    "examples",
+    "example",
+    "demo",
+    "demos",
+    "samples",
+    "sample",
+    "docs",
+    "doc",
+    "documentation",
+    "benchmarks",
+    "benchmark",
+}
 
 
-def collect_version_evidence(root: Path, package_kind: PackageKind) -> list[VersionEvidence]:
+def collect_version_evidence(
+    root: Path, package_kind: PackageKind, *, plugin_id: str | None = None
+) -> list[VersionEvidence]:
+    root = root.resolve()
+    excluded = excluded_plugin_roots(root, plugin_id)
     evidence: list[VersionEvidence] = []
     applicability: list[PackageKind] = (
         [package_kind] if package_kind is not PackageKind.UNKNOWN else []
     )
     for project in sorted(root.rglob("project.godot")):
         text = _read_text(project)
+        if _CONFIG_VERSION_3.search(text):
+            evidence.append(
+                VersionEvidence(
+                    source_type="godot3_project",
+                    source_path_or_url=_relative(project, root),
+                    raw_value="config_version=4",
+                    normalized_version="3.0",
+                    meaning=VersionMeaning.PROJECT_FEATURE_VERSION,
+                    confidence=Confidence.HIGH,
+                    notes="Godot 3 project format.",
+                )
+            )
         match = _FEATURES.search(text)
         if not match:
             continue
@@ -48,25 +84,29 @@ def collect_version_evidence(root: Path, package_kind: PackageKind) -> list[Vers
                 break
     for manifest in sorted(root.rglob("*.gdextension")):
         parser = read_ini(manifest)
-        candidate = get_case_insensitive(parser, "configuration", "compatibility_minimum")
-        normalized = normalize_version(candidate)
-        if normalized:
-            evidence.append(
-                VersionEvidence(
-                    source_type="gdextension_manifest",
-                    source_path_or_url=_relative(manifest, root),
-                    raw_value=candidate or "",
-                    normalized_version=normalized,
-                    meaning=VersionMeaning.NATIVE_BUILD_API,
-                    confidence=Confidence.HIGH,
-                    package_applicability=[
-                        PackageKind.GDEXTENSION_PREBUILT,
-                        PackageKind.CPP_SOURCE,
-                        PackageKind.RUST_SOURCE,
-                    ],
-                    notes="Direct compatibility_minimum from the native manifest.",
+        for key, meaning in (
+            ("compatibility_minimum", VersionMeaning.NATIVE_BUILD_API),
+            ("compatibility_maximum", VersionMeaning.DECLARED_MAXIMUM),
+        ):
+            candidate = get_case_insensitive(parser, "configuration", key)
+            normalized = normalize_version(candidate)
+            if normalized:
+                evidence.append(
+                    VersionEvidence(
+                        source_type="gdextension_manifest",
+                        source_path_or_url=_relative(manifest, root),
+                        raw_value=candidate or "",
+                        normalized_version=normalized,
+                        meaning=meaning,
+                        confidence=Confidence.HIGH,
+                        package_applicability=[
+                            PackageKind.GDEXTENSION_PREBUILT,
+                            PackageKind.CPP_SOURCE,
+                            PackageKind.RUST_SOURCE,
+                        ],
+                        notes=f"Direct {key} from the native manifest.",
+                    )
                 )
-            )
     for plugin_cfg in sorted(root.rglob("plugin.cfg")):
         parser = read_ini(plugin_cfg)
         candidate = get_case_insensitive(parser, "plugin", "godot_version")
@@ -101,21 +141,65 @@ def collect_version_evidence(root: Path, package_kind: PackageKind) -> list[Vers
                 )
             )
     for project in sorted(root.rglob("*.csproj")):
-        match = _DOTNET_SDK.search(_read_text(project))
-        if match:
+        for match in _DOTNET_SDK.finditer(_read_text(project)):
+            is_redot = match.group(1).casefold() == "redot"
+            version = match.group(2)
+            lineage = godot_lineage_for_redot(version) if is_redot else normalize_version(version)
             evidence.append(
                 VersionEvidence(
-                    source_type="dotnet_sdk",
+                    source_type="redot_dotnet_sdk" if is_redot else "dotnet_sdk",
                     source_path_or_url=_relative(project, root),
-                    raw_value=match.group(1),
-                    normalized_version=normalize_version(match.group(1)),
+                    raw_value=match.group(0),
+                    normalized_version=lineage,
                     meaning=VersionMeaning.SOURCE_BINDING_VERSION,
-                    confidence=Confidence.HIGH,
+                    confidence=Confidence.HIGH if lineage else Confidence.LOW,
                     package_applicability=[PackageKind.DOTNET],
-                    notes="Exact Godot.NET.Sdk declaration.",
+                    notes="SDK declaration; Redot versions use verified Godot lineage only.",
                 )
             )
-    return evidence
+    for legacy in sorted(root.rglob("*")):
+        if legacy.suffix.casefold() in {".gdnlib", ".gdns"} and legacy.is_file():
+            evidence.append(
+                VersionEvidence(
+                    source_type="godot3_native",
+                    source_path_or_url=_relative(legacy, root),
+                    raw_value=legacy.suffix,
+                    normalized_version="3.0",
+                    meaning=VersionMeaning.NATIVE_BUILD_API,
+                    confidence=Confidence.HIGH,
+                    notes="Godot 3 GDNative resource format.",
+                )
+            )
+    scoped = []
+    for item in evidence:
+        path = root / item.source_path_or_url
+        if any(path.is_relative_to(parent) for parent in excluded):
+            continue
+        if ".git" in path.relative_to(root).parts or path.is_symlink():
+            continue
+        directories = path.relative_to(root).parts[:-1]
+        auxiliary = any(
+            part.casefold() in _AUXILIARY_DIRS
+            and not (
+                index > 0
+                and directories[index - 1].casefold() == "addons"
+                and (root.joinpath(*directories[: index + 1]) / "plugin.cfg").is_file()
+            )
+            for index, part in enumerate(directories)
+        )
+        if auxiliary:
+            item.confidence = Confidence.LOW
+            item.notes += (
+                " Auxiliary directory evidence; not authoritative for the selected plugin."
+            )
+        scoped.append(item)
+    return scoped
+
+
+def excluded_plugin_roots(root: Path, plugin_id: str | None) -> list[Path]:
+    if plugin_id is None:
+        return []
+    return [path.parent for path in root.rglob("plugin.cfg") if path.parent.name != plugin_id]
 
 
 def select_effective_target(
@@ -125,6 +209,7 @@ def select_effective_target(
         item
         for item in evidence
         if item.normalized_version
+        and item.meaning is not VersionMeaning.DECLARED_MAXIMUM
         and (not item.package_applicability or package_kind in item.package_applicability)
     ]
     if not applicable:

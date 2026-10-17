@@ -4,6 +4,7 @@ from pathlib import PurePosixPath
 
 from pydantic import Field, field_validator
 
+from redot_compat.config import ArchiveLimits, PhaseTimeouts
 from redot_compat.models.base import ContractModel
 from redot_compat.models.enums import PhaseName
 from redot_compat.models.manifest import PluginTestManifest
@@ -16,6 +17,8 @@ class WorkerRequest(ContractModel):
     phases: list[PhaseName] = Field(min_length=1)
     engine_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     manifest: PluginTestManifest | None = None
+    phase_timeouts: PhaseTimeouts | None = None
+    archive_limits: ArchiveLimits | None = None
     output_subpath: str = "result"
 
     @field_validator("source_subpath")

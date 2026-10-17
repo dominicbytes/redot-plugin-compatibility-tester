@@ -1,7 +1,15 @@
+# Use with inspect/test/batch --config examples/redot-compat.toml.
+# Optional forge tokens are top-level values; never commit real credentials.
+# Configured tokens override GITHUB_TOKEN / CODEBERG_TOKEN environment variables.
+# github_token = "replace-with-a-private-token"
+# codeberg_token = "replace-with-a-private-token"
+
+# Relative paths are resolved against this configuration file.
 [paths]
 output_root = "../reports"
 cache_root = "../.redot-compat/cache"
 
+# Custom archive limits are rejected by the CLI until service propagation is available.
 [limits]
 max_archive_bytes = 536870912
 max_expanded_bytes = 2147483648
@@ -11,6 +19,7 @@ max_path_length = 512
 max_depth = 32
 max_expansion_ratio = 200.0
 
+# Dynamic test phase budgets, in seconds (all must be finite and positive).
 [timeouts]
 doctor = 30
 import = 180

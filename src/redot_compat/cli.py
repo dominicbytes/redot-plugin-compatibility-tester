@@ -9,17 +9,22 @@ from typing import Annotated
 import typer
 
 from redot_compat.batch import load_batch_manifest, run_batch
+from redot_compat.config import AppConfig, load_config
 from redot_compat.constants import APP_NAME, VERSION, ExitCode
 from redot_compat.engines.api_diff import diff_api_indexes
-from redot_compat.engines.api_index import build_api_index
+from redot_compat.engines.api_index import build_api_index, load_api_index
 from redot_compat.engines.doctor import doctor_engine
 from redot_compat.engines.snapshot import snapshot_engine
-from redot_compat.errors import RedotCompatError
+from redot_compat.errors import ConfigurationError, RedotCompatError
+from redot_compat.exit_codes import exit_code_for
+from redot_compat.fsutil import atomic_write_text
 from redot_compat.inspect.service import inspect_source
 from redot_compat.models import CompatibilityResult, CompatibilityStatus
+from redot_compat.models.batch import BatchItemState, BatchSummary
 from redot_compat.reports.render import result_payload, write_reports
+from redot_compat.runner.redaction import redact_text
 from redot_compat.schema import export_schemas, generated_schemas
-from redot_compat.testing.service import test_source
+from redot_compat.testing.service import run_compatibility_test
 
 app = typer.Typer(
     name=APP_NAME,
@@ -88,13 +93,17 @@ def doctor_command(
     configured = redot or (Path(value) if (value := os.environ.get("REDOT_BIN")) else None)
     if configured is None:
         typer.echo("doctor requires --redot or REDOT_BIN", err=True)
-        raise typer.Exit(ExitCode.INCONCLUSIVE)
+        raise typer.Exit(ExitCode.USAGE_ERROR)
     output_path = output or Path("reports") / f"doctor-{uuid.uuid4()}"
     try:
         report = doctor_engine(configured, product_hint="redot")
-    except RedotCompatError as exc:
+    except (OSError, RedotCompatError, ValueError, typer.BadParameter) as exc:
         typer.echo(f"doctor failed: {exc}", err=True)
-        raise typer.Exit(ExitCode.INCONCLUSIVE) from exc
+        raise typer.Exit(
+            ExitCode.USAGE_ERROR
+            if isinstance(exc, (ConfigurationError, ValueError, typer.BadParameter))
+            else ExitCode.INCONCLUSIVE
+        ) from exc
     output_path.mkdir(parents=True, exist_ok=True)
     payload = report.model_dump(mode="json", exclude_none=True)
     _write_json(output_path / "doctor.json", payload)
@@ -139,9 +148,13 @@ def api_snapshot_command(
             archive=archive,
             expected_archive_sha256=expected_archive_sha256,
         )
-    except RedotCompatError as exc:
+    except (OSError, RedotCompatError, ValueError, typer.BadParameter) as exc:
         typer.echo(f"snapshot failed: {exc}", err=True)
-        raise typer.Exit(ExitCode.INCONCLUSIVE) from exc
+        raise typer.Exit(
+            ExitCode.USAGE_ERROR
+            if isinstance(exc, (ConfigurationError, ValueError, typer.BadParameter))
+            else ExitCode.INCONCLUSIVE
+        ) from exc
     typer.echo(
         f"{report.engine.product_name} {report.engine.product_version}; "
         f"snapshot SHA-256 {report.snapshot_sha256}; report: {output / 'snapshot.json'}"
@@ -157,9 +170,13 @@ def api_index_command(
     ],
 ) -> None:
     """Create a deterministic symbol index from an extension API snapshot."""
-    index = build_api_index(_load_json_object(snapshot))
-    _write_json(output, index.model_dump(mode="json", exclude_none=True))
-    typer.echo(f"Indexed {len(index.symbols)} symbols to {output}")
+    try:
+        index = build_api_index(_load_json_object(snapshot))
+        _write_json(output, index.model_dump(mode="json", exclude_none=True))
+        typer.echo(f"Indexed {len(index.symbols)} symbols to {output}")
+    except (OSError, RedotCompatError, ValueError, typer.BadParameter) as exc:
+        typer.echo(f"index failed: {exc}", err=True)
+        raise typer.Exit(_failure_code(exc)) from exc
 
 
 @api_app.command("diff")
@@ -172,11 +189,14 @@ def api_diff_command(
     ],
 ) -> None:
     """Compare a control API snapshot with a candidate snapshot."""
-    result = diff_api_indexes(
-        build_api_index(_load_json_object(control)),
-        build_api_index(_load_json_object(candidate)),
-    )
-    _write_json(output, result.model_dump(mode="json"))
+    try:
+        result = diff_api_indexes(load_api_index(control), load_api_index(candidate))
+        _write_json(output, result.model_dump(mode="json"))
+    except (OSError, RedotCompatError, ValueError, typer.BadParameter) as exc:
+        typer.echo(f"diff failed: {exc}", err=True)
+        raise typer.Exit(_failure_code(exc)) from exc
+    for warning in result.warnings:
+        typer.echo(f"Warning: {warning}", err=True)
     typer.echo(
         f"API diff: +{len(result.added)} -{len(result.removed)} "
         f"~{len(result.changed)}; report: {output}"
@@ -209,6 +229,16 @@ def inspect_command(
             help="Retain an explicit request for later gated testing despite baseline policy.",
         ),
     ] = False,
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="TOML configuration; configured tokens override environment tokens.",
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", file_okay=False, dir_okay=True, resolve_path=True),
@@ -219,8 +249,10 @@ def inspect_command(
     ] = False,
 ) -> None:
     """Inspect source without executing plugin code."""
-    output_path = output or Path("reports") / f"inspect-{uuid.uuid4()}"
+    settings: AppConfig | None = None
     try:
+        settings = _load_cli_config(config)
+        output_path = output or settings.output_root / f"inspect-{uuid.uuid4()}"
         result = inspect_source(
             source,
             output_path,
@@ -229,10 +261,17 @@ def inspect_command(
             asset_pattern=asset_pattern,
             plugin_id=plugin_id,
             force_test_baseline=force_test_baseline,
+            archive_limits=settings.archive_limits,
+            github_token=settings.github_token.get_secret_value()
+            if settings.github_token
+            else None,
+            codeberg_token=settings.codeberg_token.get_secret_value()
+            if settings.codeberg_token
+            else None,
         )
-    except (OSError, RedotCompatError, ValueError) as exc:
-        typer.echo(f"inspect failed: {exc}", err=True)
-        raise typer.Exit(ExitCode.INTERNAL_ERROR) from exc
+    except (OSError, RedotCompatError, ValueError, typer.BadParameter) as exc:
+        _echo_failure("inspect", exc, settings)
+        raise typer.Exit(_failure_code(exc)) from exc
     if json_output:
         typer.echo(json.dumps(result_payload(result), sort_keys=True))
     else:
@@ -240,7 +279,7 @@ def inspect_command(
             f"{result.classification.value} ({result.confidence.value}); "
             f"result: {output_path / 'result.json'}"
         )
-    raise typer.Exit(_exit_code(result.classification))
+    raise typer.Exit(exit_code_for(result.classification))
 
 
 @app.command("test")
@@ -298,6 +337,16 @@ def test_command(
         bool,
         typer.Option("--force-test-baseline", help="Override the baseline policy skip."),
     ] = False,
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="TOML configuration; configured tokens override environment tokens.",
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", file_okay=False, dir_okay=True, resolve_path=True),
@@ -305,11 +354,14 @@ def test_command(
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Run policy-aware phases only through an explicitly eligible backend."""
-    output_path = output or Path("reports") / f"test-{uuid.uuid4()}"
+    settings: AppConfig | None = None
     try:
-        result = test_source(
+        settings = _load_cli_config(config)
+        output_path = output or settings.output_root / f"test-{uuid.uuid4()}"
+        result = run_compatibility_test(
             source,
             output_path,
+            phase_timeouts=settings.phase_timeouts,
             redot=redot,
             godot_control=godot_control,
             worker_image=worker_image,
@@ -323,10 +375,17 @@ def test_command(
             trusted_source=trusted_source,
             allow_unsafe_host=allow_unsafe_host,
             force_test_baseline=force_test_baseline,
+            archive_limits=settings.archive_limits,
+            github_token=settings.github_token.get_secret_value()
+            if settings.github_token
+            else None,
+            codeberg_token=settings.codeberg_token.get_secret_value()
+            if settings.codeberg_token
+            else None,
         )
-    except (OSError, RedotCompatError, ValueError) as exc:
-        typer.echo(f"test failed: {exc}", err=True)
-        raise typer.Exit(ExitCode.INTERNAL_ERROR) from exc
+    except (OSError, RedotCompatError, ValueError, typer.BadParameter) as exc:
+        _echo_failure("test", exc, settings)
+        raise typer.Exit(_failure_code(exc)) from exc
     if json_output:
         typer.echo(json.dumps(result_payload(result), sort_keys=True))
     else:
@@ -334,7 +393,7 @@ def test_command(
             f"{result.classification.value} ({result.confidence.value}); "
             f"result: {output_path / 'result.json'}"
         )
-    raise typer.Exit(_exit_code(result.classification))
+    raise typer.Exit(exit_code_for(result.classification))
 
 
 @app.command("batch")
@@ -343,6 +402,16 @@ def batch_command(
         Path,
         typer.Argument(exists=True, dir_okay=False, resolve_path=True),
     ],
+    config: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="TOML configuration; configured tokens override environment tokens.",
+        ),
+    ] = None,
     output: Annotated[
         Path | None,
         typer.Option("--output", file_okay=False, dir_okay=True, resolve_path=True),
@@ -353,13 +422,42 @@ def batch_command(
     ] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Run bounded, isolated static inspections from a TOML manifest."""
-    output_path = output or Path("reports") / f"batch-{uuid.uuid4()}"
+    """Run bounded, isolated static inspections from a TOML manifest.
+
+    Exit with the highest item classification code; item errors give 50 and
+    interrupted/incomplete batches give at least 40.
+    """
+    output_path = output
+    settings: AppConfig | None = None
     try:
-        summary = run_batch(load_batch_manifest(manifest), output_path, resume=resume)
-    except (OSError, RedotCompatError, ValueError) as exc:
-        typer.echo(f"batch failed: {exc}", err=True)
-        raise typer.Exit(ExitCode.INTERNAL_ERROR) from exc
+        settings = _load_cli_config(config)
+        output_path = output or settings.output_root / f"batch-{uuid.uuid4()}"
+        summary = run_batch(
+            load_batch_manifest(manifest),
+            output_path,
+            resume=resume,
+            archive_limits=settings.archive_limits,
+            github_token=settings.github_token.get_secret_value()
+            if settings.github_token
+            else None,
+            codeberg_token=settings.codeberg_token.get_secret_value()
+            if settings.codeberg_token
+            else None,
+        )
+    except KeyboardInterrupt as exc:
+        typer.echo("Batch interrupted; see the partial batch-summary.json.", err=True)
+        if output_path is None:
+            raise typer.Exit(ExitCode.INCONCLUSIVE) from exc
+        try:
+            summary = BatchSummary.model_validate_json(
+                (output_path / "batch-summary.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            raise typer.Exit(ExitCode.INCONCLUSIVE) from exc
+        raise typer.Exit(max(ExitCode.INCONCLUSIVE, _batch_exit_code(summary))) from exc
+    except (OSError, RedotCompatError, ValueError, typer.BadParameter) as exc:
+        _echo_failure("batch", exc, settings)
+        raise typer.Exit(_failure_code(exc)) from exc
     payload = summary.model_dump(mode="json")
     if json_output:
         typer.echo(json.dumps(payload, sort_keys=True))
@@ -368,8 +466,7 @@ def batch_command(
             f"Batch complete: {summary.completed}/{summary.total}; "
             f"failed: {summary.failed}; summary: {output_path / 'batch-summary.json'}"
         )
-    if summary.failed:
-        raise typer.Exit(ExitCode.INCONCLUSIVE)
+    raise typer.Exit(_batch_exit_code(summary))
 
 
 @app.command("report")
@@ -391,28 +488,43 @@ def report_command(
         write_reports(result, output)
     except (OSError, ValueError) as exc:
         typer.echo(f"report failed: {exc}", err=True)
-        raise typer.Exit(ExitCode.INTERNAL_ERROR) from exc
+        raise typer.Exit(_failure_code(exc)) from exc
     typer.echo(f"Regenerated reports in {output}")
 
 
-def _exit_code(status: CompatibilityStatus) -> ExitCode:
-    if status in {
-        CompatibilityStatus.COMPATIBLE_UNCHANGED,
-        CompatibilityStatus.COMPATIBLE_REPACKAGE_ONLY,
-    }:
-        return ExitCode.SUCCESS
-    if status is CompatibilityStatus.NO_PORT_NEEDED_BASELINE_POLICY:
-        return ExitCode.BASELINE_POLICY_SKIP
-    if status.value.startswith("PORT_REQUIRED_") or status is CompatibilityStatus.ENGINE_API_GAP:
-        return ExitCode.PORT_REQUIRED
-    if status in {
-        CompatibilityStatus.INVALID_PACKAGE,
-        CompatibilityStatus.UPSTREAM_PACKAGE_FAILURE,
-    }:
-        return ExitCode.INVALID_OR_UPSTREAM
-    if status is CompatibilityStatus.INTERNAL_TESTER_ERROR:
-        return ExitCode.INTERNAL_ERROR
-    return ExitCode.INCONCLUSIVE
+def _load_cli_config(path: Path | None) -> AppConfig:
+    return load_config(path)
+
+
+def _echo_failure(command: str, error: Exception, settings: AppConfig | None) -> None:
+    secrets = [os.environ.get(name, "") for name in ("GITHUB_TOKEN", "CODEBERG_TOKEN")]
+    if settings is not None:
+        secrets.extend(
+            value.get_secret_value()
+            for value in (settings.github_token, settings.codeberg_token)
+            if value is not None
+        )
+    typer.echo(redact_text(f"{command} failed: {error}", secrets=secrets), err=True)
+
+
+def _failure_code(error: Exception) -> ExitCode:
+    return (
+        ExitCode.USAGE_ERROR
+        if isinstance(error, (ConfigurationError, ValueError, typer.BadParameter))
+        else ExitCode.INTERNAL_ERROR
+    )
+
+
+def _batch_exit_code(summary: BatchSummary) -> ExitCode:
+    codes = [ExitCode.SUCCESS]
+    if summary.failed or any(item.state is BatchItemState.FAILED for item in summary.items):
+        codes.append(ExitCode.INTERNAL_ERROR)
+    if summary.interrupted or not summary.complete or summary.pending:
+        codes.append(ExitCode.INCONCLUSIVE)
+    for item in summary.items:
+        if item.classification is not None:
+            codes.append(exit_code_for(CompatibilityStatus(item.classification)))
+    return max(codes)
 
 
 def _load_json_object(path: Path) -> dict[str, object]:
@@ -426,10 +538,10 @@ def _load_json_object(path: Path) -> dict[str, object]:
 
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    atomic_write_text(
+        path,
         json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
-        newline="\n",
     )
 
 

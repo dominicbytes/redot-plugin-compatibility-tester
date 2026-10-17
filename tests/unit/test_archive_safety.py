@@ -125,3 +125,139 @@ def test_rejects_non_empty_target(tmp_path: Path) -> None:
         extract_archive(archive, target)
 
     assert (target / "existing").read_text(encoding="utf-8") == "do not overwrite"
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        "file:stream",
+        "a<b",
+        "a>b",
+        'a"b',
+        "a|b",
+        "a?b",
+        "a*b",
+        *[f"a{chr(value)}b" for value in [*range(32), 127]],
+        "trailing.",
+        "trailing ",
+        *[
+            f"{name}{suffix}"
+            for name in [
+                "con",
+                "PrN",
+                "aux",
+                "nul",
+                "COM0",
+                "LPT0",
+                "CONIN$",
+                "conout$",
+                *[
+                    f"{prefix}{digit}"
+                    for prefix in ("COM", "LPT")
+                    for digit in "123456789\u00b9\u00b2\u00b3"
+                ],
+            ]
+            for suffix in ("", ".txt")
+        ],
+    ],
+)
+def test_all_windows_unsafe_components(component: str) -> None:
+    from redot_compat.archive.safety import normalize_member_path
+
+    with pytest.raises(UnsafeArchiveError):
+        normalize_member_path(f"folder/{component}", ArchiveLimits())
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        ["a", "a/b"],
+        ["a/b", "a"],
+        ["A", "a/b"],
+        ["A/b", "a/c"],
+    ],
+)
+@pytest.mark.parametrize("kind", ["zip", "tar"])
+def test_path_conflicts_rejected_before_extraction(
+    tmp_path: Path, names: list[str], kind: str
+) -> None:
+    archive = tmp_path / f"conflict.{kind}"
+    (_zip if kind == "zip" else _tar)(archive, [(name, b"data") for name in names])
+    target = tmp_path / "target"
+    with pytest.raises(UnsafeArchiveError, match=r"conflict|collision"):
+        extract_archive(archive, target)
+    assert not target.exists()
+
+
+@pytest.mark.parametrize(
+    "kind", [tarfile.LNKTYPE, tarfile.SYMTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE, tarfile.FIFOTYPE]
+)
+def test_tar_special_members(tmp_path: Path, kind: bytes) -> None:
+    path = tmp_path / "special.tar"
+    with tarfile.open(path, "w") as archive:
+        member = tarfile.TarInfo("special")
+        member.type = kind
+        member.linkname = "outside"
+        archive.addfile(member)
+    target = tmp_path / "target"
+    with pytest.raises(UnsafeArchiveError, match=r"link|special file"):
+        extract_archive(path, target)
+    assert not target.exists()
+
+
+def test_destination_commonpath_value_error_is_unsafe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from redot_compat.archive import extract
+
+    def invalid(paths: object) -> str:
+        raise ValueError("different drives")
+
+    monkeypatch.setattr(extract.os.path, "commonpath", invalid)
+    with pytest.raises(UnsafeArchiveError):
+        extract._safe_destination(tmp_path, Path("file"))
+
+
+def test_extraction_value_error_is_unsafe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from redot_compat.archive import extract
+
+    archive = tmp_path / "safe.zip"
+    _zip(archive, [("file", b"safe")])
+
+    def invalid(*args: object, **kwargs: object) -> None:
+        raise ValueError("invalid metadata")
+
+    monkeypatch.setattr(extract, "validate_entries", invalid)
+    with pytest.raises(UnsafeArchiveError):
+        extract_archive(archive, tmp_path / "target")
+
+
+def test_zip_stream_exceeding_preflight_size_hits_copy_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import copy
+
+    archive = tmp_path / "underreported.zip"
+    _zip(archive, [("file", b"x" * 32)])
+    original_infolist = zipfile.ZipFile.infolist
+    original_open = zipfile.ZipFile.open
+
+    def underreported(self: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+        infos = [copy.copy(info) for info in original_infolist(self)]
+        for info in infos:
+            info.file_size = 1
+        return infos
+
+    def real_stream(self: zipfile.ZipFile, name, *args, **kwargs):  # type: ignore[no-untyped-def]
+        # Keep real ZIP streams while simulating untrusted preflight size metadata.
+        if isinstance(name, zipfile.ZipInfo):
+            name = name.filename
+        return original_open(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "infolist", underreported)
+    monkeypatch.setattr(zipfile.ZipFile, "open", real_stream)
+    target = tmp_path / "target"
+    with pytest.raises(UnsafeArchiveError, match="while extracting"):
+        extract_archive(archive, target, limits=ArchiveLimits(max_file_bytes=16))
+    assert not target.exists()

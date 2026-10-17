@@ -1,14 +1,22 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from redot_compat.inspect.native import binary_architecture, sha256
 from redot_compat.inspect.parsing import get_case_insensitive, read_ini, unquote
 from redot_compat.inspect.version_evidence import (
     collect_version_evidence,
+    excluded_plugin_roots,
     select_effective_target,
 )
-from redot_compat.models import NativeLibrary, PackageKind, PluginInventory
+from redot_compat.models import (
+    Finding,
+    FindingCategory,
+    FindingSeverity,
+    NativeLibrary,
+    PackageKind,
+    PluginInventory,
+)
 
 _NATIVE_SUFFIXES = {".dll", ".so", ".dylib", ".framework"}
 _CPP_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp"}
@@ -16,7 +24,11 @@ _CPP_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp"}
 
 def inspect_plugin(root: Path, *, plugin_id: str | None = None) -> PluginInventory:
     root = root.resolve(strict=True)
-    files = _files(root)
+    excluded = excluded_plugin_roots(root, plugin_id)
+    files = [
+        path for path in _files(root) if not any(path.is_relative_to(parent) for parent in excluded)
+    ]
+    findings: list[Finding] = []
     relative_files = {path: path.relative_to(root).as_posix() for path in files}
     plugin_cfgs = [path for path in files if path.name.casefold() == "plugin.cfg"]
     gdextensions = [path for path in files if path.suffix.casefold() == ".gdextension"]
@@ -30,8 +42,17 @@ def inspect_plugin(root: Path, *, plugin_id: str | None = None) -> PluginInvento
         }
     )
     if plugin_id:
-        plugin_roots = [path for path in plugin_roots if Path(path).name == plugin_id]
-    plugin_ids = [Path(path).name for path in plugin_roots]
+        plugin_roots = [path for path in plugin_roots if (root / path).name == plugin_id]
+    plugin_ids = [(root / path).name for path in plugin_roots]
+    if plugin_id and not plugin_roots:
+        findings.append(
+            Finding(
+                code="PLUGIN_ID_NOT_FOUND",
+                severity=FindingSeverity.ERROR,
+                category=FindingCategory.LAYOUT,
+                message=f"No plugin root matches --plugin-id {plugin_id}.",
+            )
+        )
 
     contains_rust = any(path.name == "Cargo.toml" for path in files)
     contains_dotnet = any(path.suffix.casefold() in {".csproj", ".sln"} for path in files)
@@ -42,7 +63,7 @@ def inspect_plugin(root: Path, *, plugin_id: str | None = None) -> PluginInvento
     contains_engine_module = any(path.name == "SCsub" for path in files) and any(
         path.name.casefold().startswith("register_types") for path in files
     )
-    native_libraries = _native_libraries(root, gdextensions)
+    native_libraries = _native_libraries(root, gdextensions, findings)
     contains_native_binaries = any(path.suffix.casefold() in _NATIVE_SUFFIXES for path in files)
     contains_gdextension = bool(gdextensions)
     package_kind = _package_kind(
@@ -64,15 +85,30 @@ def inspect_plugin(root: Path, *, plugin_id: str | None = None) -> PluginInvento
     if contains_dotnet or any(path.suffix.casefold() == ".cs" for path in files):
         languages.append("C#")
 
-    evidence = collect_version_evidence(root, package_kind)
+    evidence = collect_version_evidence(root, package_kind, plugin_id=plugin_id)
     effective_target, effective_confidence, conflicts = select_effective_target(
         evidence, package_kind
     )
     entry_scripts = []
+    contains_editor_plugin = False
     for path in plugin_cfgs:
-        script = get_case_insensitive(read_ini(path), "plugin", "script")
+        parser = read_ini(path)
+        contains_editor_plugin |= parser.has_option("plugin", "script")
+        script = get_case_insensitive(parser, "plugin", "script")
         if script:
-            entry_scripts.append((path.parent / script).relative_to(root).as_posix())
+            destination = _safe_entry_script(root, path.parent, script)
+            if destination is None:
+                findings.append(
+                    Finding(
+                        code="UNSAFE_ENTRY_SCRIPT",
+                        severity=FindingSeverity.ERROR,
+                        category=FindingCategory.SECURITY,
+                        file=relative_files[path],
+                        message=f"Entry script path is absolute or escapes the package: {script}",
+                    )
+                )
+            else:
+                entry_scripts.append(destination.relative_to(root).as_posix())
     addon_files = sorted(
         relative
         for path, relative in relative_files.items()
@@ -83,11 +119,12 @@ def inspect_plugin(root: Path, *, plugin_id: str | None = None) -> PluginInvento
         {item.architecture for item in native_libraries if item.architecture is not None}
     )
     return PluginInventory(
+        findings=findings,
         plugin_roots=plugin_roots,
         plugin_ids=plugin_ids,
         package_kind=package_kind,
         languages=languages,
-        contains_editor_plugin=bool(entry_scripts),
+        contains_editor_plugin=contains_editor_plugin,
         contains_runtime_library=contains_gdextension,
         contains_gdextension=contains_gdextension,
         contains_native_source=contains_native_source,
@@ -119,7 +156,9 @@ def _files(root: Path) -> list[Path]:
     )
 
 
-def _native_libraries(root: Path, manifests: list[Path]) -> list[NativeLibrary]:
+def _native_libraries(
+    root: Path, manifests: list[Path], findings: list[Finding]
+) -> list[NativeLibrary]:
     libraries: list[NativeLibrary] = []
     for manifest in manifests:
         parser = read_ini(manifest)
@@ -130,7 +169,18 @@ def _native_libraries(root: Path, manifests: list[Path]) -> list[NativeLibrary]:
             resource_path = unquote(raw_path) or ""
             destination = _resource_path(root, manifest.parent, resource_path)
             platform, architecture, build, precision, features = _selector(selector)
-            exists = destination.is_file()
+            contained = _is_relative_to(destination, root)
+            if not contained:
+                findings.append(
+                    Finding(
+                        code="NATIVE_LIBRARY_OUTSIDE_PACKAGE",
+                        severity=FindingSeverity.ERROR,
+                        category=FindingCategory.SECURITY,
+                        file=manifest.relative_to(root).as_posix(),
+                        message=f"Native library escapes the package; not read: {resource_path}",
+                    )
+                )
+            exists = contained and destination.is_file()
             detected_architecture = binary_architecture(destination) if exists else None
             libraries.append(
                 NativeLibrary(
@@ -151,6 +201,17 @@ def _native_libraries(root: Path, manifests: list[Path]) -> list[NativeLibrary]:
                 )
             )
     return libraries
+
+
+def _safe_entry_script(root: Path, plugin_root: Path, value: str) -> Path | None:
+    relative = value.removeprefix("res://")
+    if Path(relative).is_absolute() or PureWindowsPath(relative).drive or relative.startswith("\\"):
+        return None
+    try:
+        destination = _resource_path(root, plugin_root, value)
+    except (OSError, ValueError):
+        return None
+    return destination if destination.is_relative_to(root) else None
 
 
 def _resource_path(root: Path, manifest_root: Path, value: str) -> Path:

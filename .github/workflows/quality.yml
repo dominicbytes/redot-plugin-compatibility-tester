@@ -23,6 +23,12 @@ jobs:
         include:
           - os: ubuntu-24.04
             python: "3.12"
+          - os: ubuntu-24.04
+            python: "3.13"
+          - os: ubuntu-24.04
+            python: "3.14"
+          - os: windows-2025
+            python: "3.12"
           - os: windows-2025
             python: "3.14"
     steps:
@@ -43,7 +49,7 @@ jobs:
       - name: Lint
         run: uv run --frozen ruff check .
       - name: Type check
-        run: uv run --frozen mypy src
+        run: uv run --frozen mypy src scripts
       - name: Check public schemas
         run: uv run --frozen redot-compat schema export --check
       - name: Run static-only tests

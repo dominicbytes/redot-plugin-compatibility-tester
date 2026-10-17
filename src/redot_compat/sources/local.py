@@ -85,7 +85,7 @@ def _copy_directory(source: Path, target: Path, limits: ArchiveLimits) -> tuple[
                 raise SourceResolutionError("local directory contains an overlong path")
             if len(entry_relative.parts) > limits.max_depth:
                 raise SourceResolutionError("local directory exceeds the nesting-depth limit")
-            if entry.is_symlink():
+            if entry.is_symlink() or Path(entry.path).is_junction():
                 raise SourceResolutionError(
                     f"local directory contains a symbolic link: {entry_relative.as_posix()}"
                 )
