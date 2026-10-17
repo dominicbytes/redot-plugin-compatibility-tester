@@ -63,6 +63,10 @@ packages = ["src/redot_compat"]
 "harness" = "redot_compat/harness"
 
 [tool.hatch.build.targets.sdist]
+exclude = [
+  "/docs/gamedev/references/*.json",
+  "/docs/gamedev/source-of-truth.xlsx",
+]
 include = [
   "/src",
   "/harness",

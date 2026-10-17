@@ -40,6 +40,8 @@ class CompatibilityResult(ContractModel):
     platform: str
     sandbox: str = "none"
     phases: list[PhaseResult] = Field(default_factory=list)
+    engine_canary_phases: list[PhaseResult] = Field(default_factory=list)
+    phase_retry_attempts: list[PhaseResult] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
     classification: CompatibilityStatus
     confidence: Confidence
@@ -54,7 +56,12 @@ class CompatibilityResult(ContractModel):
     @model_validator(mode="after")
     def enforce_policy_semantics(self) -> CompatibilityResult:
         if self.policy.decision is BaselineDecision.SKIP:
-            if self.phases or self.policy.dynamic_testing_performed:
+            if (
+                self.phases
+                or self.engine_canary_phases
+                or self.phase_retry_attempts
+                or self.policy.dynamic_testing_performed
+            ):
                 raise ValueError("policy skip cannot contain dynamic phases")
             if self.classification is not CompatibilityStatus.NO_PORT_NEEDED_BASELINE_POLICY:
                 raise ValueError("policy skip requires NO_PORT_NEEDED_BASELINE_POLICY")

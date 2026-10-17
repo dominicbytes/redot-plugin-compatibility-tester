@@ -15,6 +15,7 @@ class ChangedSymbol(ContractModel):
 class ApiDiff(ContractModel):
     control_engine_version: str | None = None
     candidate_engine_version: str | None = None
+    warnings: list[str] = Field(default_factory=list)
     added: list[str] = Field(default_factory=list)
     removed: list[str] = Field(default_factory=list)
     changed: list[ChangedSymbol] = Field(default_factory=list)
@@ -27,6 +28,12 @@ def diff_api_indexes(control: ApiIndex, candidate: ApiIndex) -> ApiDiff:
     return ApiDiff(
         control_engine_version=control.engine_version,
         candidate_engine_version=candidate.engine_version,
+        warnings=[
+            f"API {field} differs: control={getattr(control, field)!r}, "
+            f"candidate={getattr(candidate, field)!r}; comparison may be misleading"
+            for field in ("precision", "build_configuration")
+            if getattr(control, field) != getattr(candidate, field)
+        ],
         added=sorted(candidate_keys - control_keys),
         removed=sorted(control_keys - candidate_keys),
         changed=[

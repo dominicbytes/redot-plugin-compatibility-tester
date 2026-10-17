@@ -1,8 +1,26 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
+FROM python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b AS engine-download
 
-ARG REDOT_URL
-ARG REDOT_SHA256
+ARG REDOT_VERSION=26.3-stable
+ARG REDOT_SHA512=d370f50a85efa1c62549743c9c55f56fdac3f4ea66f353bfa3135d4c4fe68ef47849db7ce5d37b6ab9b09c5aa6ee748e10f44dc2c55485f3e799f5dfe2344166
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl unzip; \
+    rm -rf /var/lib/apt/lists/*; \
+    echo "$REDOT_SHA512" | grep -Eq '^[a-f0-9]{128}$'; \
+    curl --fail --location --proto '=https' --tlsv1.2 \
+      "https://github.com/Redot-Engine/redot-engine/releases/download/redot-${REDOT_VERSION}/Redot_v${REDOT_VERSION}_linux_x64.zip" \
+      --output /tmp/redot.zip; \
+    echo "$REDOT_SHA512  /tmp/redot.zip" | sha512sum -c -; \
+    test "$(unzip -Z1 /tmp/redot.zip | grep -Fxc 'redot.linuxbsd.editor.x86_64')" -eq 1; \
+    mkdir -p /opt/redot; \
+    unzip -p /tmp/redot.zip redot.linuxbsd.editor.x86_64 > /opt/redot/redot; \
+    chmod 0555 /opt/redot/redot; \
+    cd /opt/redot; \
+    sha256sum redot > SHA256SUMS
+
+FROM python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 
 LABEL org.opencontainers.image.title="redot-compat worker" \
       org.opencontainers.image.source="https://github.com/dominicbytes/redot-plugin-compatibility-tester" \
@@ -11,22 +29,14 @@ LABEL org.opencontainers.image.title="redot-compat worker" \
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      ca-certificates curl unzip xvfb \
+      ca-certificates xvfb \
       libasound2 libfontconfig1 libgl1 libxi6 libxinerama1 libxcursor1 libx11-6; \
     rm -rf /var/lib/apt/lists/*; \
-    test -n "$REDOT_URL"; \
-    echo "$REDOT_SHA256" | grep -Eq '^[a-f0-9]{64}$'; \
-    curl --fail --location --proto '=https' --tlsv1.2 "$REDOT_URL" --output /tmp/redot.zip; \
-    echo "$REDOT_SHA256  /tmp/redot.zip" | sha256sum --check --strict; \
-    mkdir -p /tmp/redot-extract /opt/redot; \
-    unzip -q /tmp/redot.zip -d /tmp/redot-extract; \
-    engine="$(find /tmp/redot-extract -type f -name '*editor*x86_64*' | head -n 1)"; \
-    test -n "$engine"; \
-    cp "$engine" /opt/redot/redot; \
-    chmod 0555 /opt/redot/redot; \
-    rm -rf /tmp/redot.zip /tmp/redot-extract; \
     groupadd --gid 10001 worker; \
     useradd --uid 10001 --gid 10001 --no-create-home --home-dir /home/worker worker
+
+COPY --from=engine-download /opt/redot /opt/redot
+RUN cd /opt/redot && sha256sum --check --strict SHA256SUMS
 
 COPY docker/requirements.lock /opt/redot-compat/requirements.lock
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \

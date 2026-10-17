@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import secrets
 import shutil
 import tomllib
 import uuid
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from redot_compat.classify import ClassificationContext, classify
-from redot_compat.engines.doctor import doctor_engine
+from redot_compat.config import ArchiveLimits, PhaseTimeouts
+from redot_compat.engines.doctor import DoctorReport, doctor_engine
 from redot_compat.errors import ConfigurationError
 from redot_compat.inspect.service import inspect_source
+from redot_compat.logs.parser import strip_ansi
 from redot_compat.models import (
     BaselineDecision,
     CompatibilityResult,
@@ -35,6 +39,7 @@ from redot_compat.sandbox.docker_linux import (
     prepare_heartbeat,
     run_docker_command,
 )
+from redot_compat.sandbox.worker_output import read_worker_text, translate_worker_path
 from redot_compat.sandbox.worker_protocol import WorkerRequest
 from redot_compat.testing.host import run_host_phase
 from redot_compat.workspace import Workspace, create_workspace, install_selected_addon
@@ -46,7 +51,7 @@ _BASE_HARNESS = _HARNESS_ROOT / "base_project"
 _EDITOR_HARNESS = _HARNESS_ROOT / "editor_plugin"
 
 
-def test_source(
+def run_compatibility_test(
     source: str,
     output: Path,
     *,
@@ -63,6 +68,10 @@ def test_source(
     trusted_source: bool = False,
     allow_unsafe_host: bool = False,
     force_test_baseline: bool = False,
+    archive_limits: ArchiveLimits | None = None,
+    phase_timeouts: PhaseTimeouts | None = None,
+    github_token: str | None = None,
+    codeberg_token: str | None = None,
 ) -> CompatibilityResult:
     output_path = output.resolve()
     if output_path.exists() and any(output_path.iterdir()):
@@ -77,10 +86,14 @@ def test_source(
         asset_pattern=asset_pattern,
         plugin_id=plugin_id,
         force_test_baseline=force_test_baseline,
+        archive_limits=archive_limits,
+        github_token=github_token,
+        codeberg_token=codeberg_token,
     )
     if static_result.classification in {
         CompatibilityStatus.NO_PORT_NEEDED_BASELINE_POLICY,
         CompatibilityStatus.INVALID_PACKAGE,
+        CompatibilityStatus.PORT_REQUIRED_MAJOR_UPGRADE,
     } or (
         static_result.classification is CompatibilityStatus.INCONCLUSIVE
         and len(static_result.inventory.plugin_roots) != 1
@@ -126,6 +139,8 @@ def test_source(
             manifest,
             docker_profile,
             worker_engine_sha256,
+            phase_timeouts,
+            archive_limits,
         )
         write_reports(result, output_path)
         return result
@@ -140,13 +155,14 @@ def test_source(
         write_reports(result, output_path)
         return result
 
-    doctor = doctor_engine(redot, product_hint="redot")
+    timeouts = phase_timeouts or PhaseTimeouts()
+    doctor, control_doctor = _doctor_engines(redot, godot_control, timeouts)
+    canary_phases: list[PhaseResult] = []
+    retry_attempts: list[PhaseResult] = []
     workspace, environment = _prepare_engine_run(
         output_path / "runs/redot",
         source_root,
         plugin_root,
-        plugin_name,
-        manifest,
     )
     phases = _run_selected_phases(
         redot.resolve(strict=True),
@@ -154,22 +170,15 @@ def test_source(
         environment,
         manifest,
         EngineRole.REDOT,
+        phase_timeouts=timeouts,
+        canary_phases=canary_phases,
+        retry_attempts=retry_attempts,
     )
-    control_doctor = None
     if godot_control is not None:
-        control_doctor = doctor_engine(godot_control, product_hint="godot")
-        if control_doctor.engine.compatibility_version != doctor.engine.compatibility_version:
-            raise ConfigurationError(
-                "Godot control compatibility version must exactly match the Redot target "
-                f"({doctor.engine.compatibility_version}); got "
-                f"{control_doctor.engine.compatibility_version}"
-            )
         control_workspace, control_environment = _prepare_engine_run(
             output_path / "runs/godot-control",
             source_root,
             plugin_root,
-            plugin_name,
-            manifest,
         )
         phases.extend(
             _run_selected_phases(
@@ -178,8 +187,57 @@ def test_source(
                 control_environment,
                 manifest,
                 EngineRole.GODOT_CONTROL,
+                phase_timeouts=timeouts,
+                canary_phases=canary_phases,
+                retry_attempts=retry_attempts,
             )
         )
+    return _host_result(
+        static_result,
+        output_path,
+        workspace,
+        doctor,
+        control_doctor,
+        manifest,
+        phases,
+        canary_phases,
+        retry_attempts,
+    )
+
+
+def _doctor_engines(
+    redot: Path,
+    godot_control: Path | None,
+    timeouts: PhaseTimeouts,
+) -> tuple[DoctorReport, DoctorReport | None]:
+    control = (
+        doctor_engine(godot_control, product_hint="godot", timeout_seconds=timeouts.doctor)
+        if godot_control is not None
+        else None
+    )
+    doctor = doctor_engine(redot, product_hint="redot", timeout_seconds=timeouts.doctor)
+    if (
+        control is not None
+        and control.engine.compatibility_version != doctor.engine.compatibility_version
+    ):
+        raise ConfigurationError(
+            "Godot control compatibility version must exactly match the Redot target "
+            f"({doctor.engine.compatibility_version}); got {control.engine.compatibility_version}"
+        )
+    return doctor, control
+
+
+def _host_result(
+    static_result: CompatibilityResult,
+    output_path: Path,
+    workspace: Workspace,
+    doctor: DoctorReport,
+    control_doctor: DoctorReport | None,
+    manifest: PluginTestManifest,
+    phases: list[PhaseResult],
+    canary_phases: list[PhaseResult],
+    retry_attempts: list[PhaseResult],
+) -> CompatibilityResult:
     selected_scope_complete = (
         static_result.inventory.contains_editor_plugin and PhaseName.EDITOR in manifest.phases
     ) or (bool(manifest.probes) and PhaseName.RUNTIME in manifest.phases)
@@ -213,6 +271,8 @@ def test_source(
         platform=static_result.platform,
         sandbox=Backend.TRUSTED_HOST.value,
         phases=phases,
+        engine_canary_phases=canary_phases,
+        phase_retry_attempts=retry_attempts,
         findings=[finding for phase in phases for finding in phase.findings],
         classification=decision.status,
         confidence=decision.confidence,
@@ -229,17 +289,42 @@ def test_source(
                 ]
             ),
             f"Tested only {static_result.platform} and the selected manifest phases.",
+            *(
+                [
+                    "An intermittent post-pass shutdown crash or post-fail shutdown crash occurred "
+                    "and was not reproducible on a non-crashing same-phase retry; "
+                    "engine canaries did not reproduce it."
+                ]
+                if any(
+                    finding.code == "ENGINE_INTERMITTENT_SHUTDOWN_CRASH"
+                    for phase in phases
+                    for finding in phase.findings
+                )
+                else []
+            ),
+            *(
+                [
+                    "All three same-phase attempts crashed after authenticated completion; "
+                    "the phase result uses pre-crash evidence. Shutdown stability remains "
+                    "unverified and confidence is capped at medium."
+                ]
+                if any(
+                    finding.code == "ENGINE_SHUTDOWN_CRASH_RETRY_EXHAUSTED"
+                    for phase in phases
+                    for finding in phase.findings
+                )
+                else []
+            ),
         ],
         reproduction={
             "command": [
                 "redot-compat",
                 "test",
-                static_result.source.requested_url_or_path,
+                *_source_arguments(static_result, manifest),
                 "--backend",
                 "host",
                 "--trusted-source",
                 "--allow-unsafe-host-execution",
-                "--force-test-baseline",
                 "--redot",
                 doctor.engine.binary_path,
                 *(
@@ -270,21 +355,49 @@ def _run_docker_backend(
     manifest: PluginTestManifest,
     profile: DockerProfile,
     worker_engine_sha256: str,
+    phase_timeouts: PhaseTimeouts | None = None,
+    archive_limits: ArchiveLimits | None = None,
 ) -> CompatibilityResult:
     run_id = f"run-{uuid.uuid4().hex}"
     worker_output = output_path / "docker-worker"
     worker_output.mkdir()
+    timeouts = phase_timeouts or PhaseTimeouts()
+    reproduction = {
+        **static_result.reproduction,
+        "command": [
+            "redot-compat",
+            "test",
+            *_source_arguments(static_result, manifest),
+            "--backend",
+            "docker",
+            "--worker-image",
+            profile.image,
+            "--worker-engine-sha256",
+            worker_engine_sha256.casefold(),
+            "--manifest",
+            "__REDOT_COMPAT_MANIFEST__",
+        ],
+        "manifest": manifest.to_harness_payload(),
+        "phase_timeouts": timeouts.model_dump(mode="json"),
+        "source_sha256": static_result.source.archive_sha256,
+        "worker_image": profile.image,
+        "worker_engine_sha256": worker_engine_sha256.casefold(),
+        "worker_run_id": run_id,
+        "phase_configuration_sha256": _manifest_sha256(manifest),
+    }
     request = WorkerRequest(
         run_id=run_id,
         source_subpath=".",
         phases=manifest.phases,
         engine_sha256=worker_engine_sha256.casefold(),
         manifest=manifest,
+        phase_timeouts=phase_timeouts,
+        archive_limits=archive_limits,
         output_subpath="result",
     )
     request_path = worker_output / "request.json"
     request_path.write_text(
-        request.model_dump_json(indent=2) + "\n",
+        request.model_dump_json(indent=2, exclude_unset=True) + "\n",
         encoding="utf-8",
         newline="\n",
     )
@@ -301,23 +414,74 @@ def _run_docker_backend(
         command,
         run_id=run_id,
         heartbeat=heartbeat,
-        working_directory=_PROJECT_ROOT,
+        working_directory=worker_output,
         output_directory=output_path / "docker-controller-logs",
         timeout_seconds=min(
             3600.0,
-            float(manifest.timeout_seconds * len(manifest.phases) + 120),
+            sum(_phase_timeout(phase, manifest, timeouts) for phase in manifest.phases) * 6
+            + timeouts.doctor
+            + 120,
         ),
+        max_output_bytes=profile.max_output_bytes,
     )
+    if (
+        process.stdout_truncated
+        or process.stderr_truncated
+        or process.combined_truncated
+        or process.output_quota_exceeded
+    ):
+        phase = PhaseResult(
+            phase_name=PhaseName.IMPORT,
+            engine_role=EngineRole.REDOT,
+            status=PhaseStatus.FAIL,
+            command=process.command,
+            exit_code=process.exit_code,
+            stdout_path=process.stdout_path,
+            stderr_path=process.stderr_path,
+            combined_log_path=process.combined_log_path,
+            findings=[
+                Finding(
+                    code="LOG_TRUNCATED",
+                    severity=FindingSeverity.ERROR,
+                    category=FindingCategory.TESTER,
+                    message="Docker logs or worker output exceeded the retained output limit.",
+                    phase=PhaseName.IMPORT,
+                    engine_role=EngineRole.REDOT,
+                )
+            ],
+        )
+        decision = classify(
+            ClassificationContext(inventory=static_result.inventory, phases=[phase])
+        )
+        return static_result.model_copy(
+            update={
+                "run_id": run_id,
+                "sandbox": Backend.DOCKER_LINUX.value,
+                "policy": static_result.policy.model_copy(
+                    update={"dynamic_testing_performed": True}
+                ),
+                "phases": [phase],
+                "findings": phase.findings,
+                "classification": decision.status,
+                "confidence": decision.confidence,
+                "confidence_reasons": decision.confidence_reasons,
+                "port_candidate": decision.port_candidate,
+                "recommended_next_action": decision.action,
+                "reproduction": reproduction,
+            }
+        )
     result_path = worker_output / "result/result.json"
     if not result_path.is_file():
         worker_error = worker_output / "worker-error.json"
         detail = (
-            worker_error.read_text(encoding="utf-8", errors="replace")[:2000]
+            read_worker_text(worker_error, root=worker_output, max_bytes=64 * 1024)[:2000]
             if worker_error.is_file()
             else "worker produced no result or structured error"
         )
         raise ConfigurationError(f"Docker worker exited {process.exit_code}: {detail}")
-    worker_result = CompatibilityResult.model_validate_json(result_path.read_text(encoding="utf-8"))
+    worker_result = CompatibilityResult.model_validate_json(
+        read_worker_text(result_path, root=worker_output, max_bytes=16 * 1024 * 1024)
+    )
     if (
         worker_result.inventory.plugin_roots != static_result.inventory.plugin_roots
         or worker_result.inventory.package_kind is not static_result.inventory.package_kind
@@ -326,32 +490,22 @@ def _run_docker_backend(
     phases = [_translate_worker_phase(phase, worker_output) for phase in worker_result.phases]
     reproduction = {
         **worker_result.reproduction,
-        "command": [
-            "redot-compat",
-            "test",
-            static_result.source.requested_url_or_path,
-            "--backend",
-            "docker",
-            "--worker-image",
-            profile.image,
-            "--worker-engine-sha256",
-            worker_engine_sha256.casefold(),
-            "--force-test-baseline",
-            "--manifest",
-            "__REDOT_COMPAT_MANIFEST__",
-        ],
-        "source_sha256": static_result.source.archive_sha256,
+        **reproduction,
         "worker_input_sha256": worker_result.source.archive_sha256,
-        "worker_image": profile.image,
-        "worker_engine_sha256": worker_engine_sha256.casefold(),
-        "worker_run_id": run_id,
-        "phase_configuration_sha256": _manifest_sha256(manifest),
     }
     return worker_result.model_copy(
         update={
             "source": static_result.source,
             "inventory": static_result.inventory,
             "phases": phases,
+            "engine_canary_phases": [
+                _translate_worker_phase(phase, worker_output)
+                for phase in worker_result.engine_canary_phases
+            ],
+            "phase_retry_attempts": [
+                _translate_worker_phase(phase, worker_output)
+                for phase in worker_result.phase_retry_attempts
+            ],
             "findings": [finding for phase in phases for finding in phase.findings],
             "sandbox": Backend.DOCKER_LINUX.value,
             "limitations": [
@@ -365,14 +519,7 @@ def _run_docker_backend(
 
 def _translate_worker_phase(phase: PhaseResult, worker_output: Path) -> PhaseResult:
     def translate(value: str | None) -> str | None:
-        if value is None:
-            return None
-        path = PurePosixPath(value)
-        try:
-            relative = path.relative_to("/output")
-        except ValueError:
-            return value
-        return str(worker_output.joinpath(*relative.parts))
+        return translate_worker_path(value, worker_output=worker_output)
 
     return phase.model_copy(
         update={
@@ -408,26 +555,27 @@ def _prepare_engine_run(
     base_root: Path,
     source_root: Path,
     plugin_root: str,
-    plugin_name: str,
-    manifest: PluginTestManifest,
 ) -> tuple[Workspace, dict[str, str]]:
     workspace = create_workspace(base_root)
-    _prepare_fixture(workspace.project, source_root, plugin_root)
-    environment = build_isolated_environment(workspace.state)
-    environment.update(
-        {
-            "REDOT_COMPAT_RUN_ID": workspace.run_id,
-            "REDOT_COMPAT_PLUGIN_ID": plugin_name,
-        }
-    )
-    config_path = workspace.state / "harness.json"
-    config_path.write_text(
-        json.dumps(manifest.to_harness_payload(), indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    environment["REDOT_COMPAT_HARNESS_JSON"] = str(config_path)
-    return workspace, environment
+    # Preserve the acquired addon's original bytes for isolated same-phase retries.
+    install_selected_addon(source_root, plugin_root, workspace.source)
+    _prepare_fixture(workspace.project, workspace.source, f"addons/{Path(plugin_root).name}")
+    return workspace, build_isolated_environment(workspace.state)
+
+
+def _source_arguments(result: CompatibilityResult, manifest: PluginTestManifest) -> list[str]:
+    source = result.source
+    arguments = [source.requested_url_or_path]
+    if source.release_tag is not None:
+        arguments.extend(["--release", source.release_tag])
+        if source.release_asset_name is not None:
+            arguments.extend(["--asset", source.release_asset_name])
+    elif source.resolved_commit is not None:
+        arguments.extend(["--ref", source.resolved_commit])
+    arguments.extend(["--plugin-id", manifest.plugin_id])
+    if result.policy.decision is BaselineDecision.FORCED_TEST:
+        arguments.append("--force-test-baseline")
+    return arguments
 
 
 def _manifest_sha256(manifest: PluginTestManifest) -> str:
@@ -453,84 +601,108 @@ def _enable_editor_harness(project: Path) -> None:
         project_file.write_text(content.rstrip() + "\n" + section, encoding="utf-8", newline="\n")
 
 
+_SHUTDOWN_CRASH_CODES = {"ENGINE_SHUTDOWN_CRASH_AFTER_PASS", "ENGINE_SHUTDOWN_CRASH_AFTER_FAIL"}
+
+
+_PHASE_ARGUMENTS = {
+    PhaseName.IMPORT: ["--editor"],
+    PhaseName.EDITOR: ["--editor"],
+    PhaseName.RUNTIME: ["--script", "runtime_probe.gd"],
+}
+
+
+def _phase_timeout(
+    phase: PhaseName,
+    manifest: PluginTestManifest,
+    timeouts: PhaseTimeouts,
+) -> float:
+    if "timeout_seconds" in manifest.model_fields_set:
+        return float(manifest.timeout_seconds)
+    return float(getattr(timeouts, "import_phase" if phase is PhaseName.IMPORT else phase.value))
+
+
+def _run_phase(
+    binary: Path,
+    workspace: Workspace,
+    environment: dict[str, str],
+    manifest: PluginTestManifest,
+    phase: PhaseName,
+    role: EngineRole,
+    timeouts: PhaseTimeouts,
+    *,
+    canary: bool = False,
+) -> PhaseResult:
+    if phase in {PhaseName.IMPORT, PhaseName.EDITOR}:
+        _enable_editor_harness(workspace.project)
+    key = secrets.token_hex(32)
+    if canary and phase is PhaseName.EDITOR:
+        shutil.copytree(
+            _HARNESS_ROOT / "canary_plugin", workspace.project / "addons/redot_compat_canary"
+        )
+    config_path = workspace.state / "harness.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "run_id": workspace.run_id,
+                "plugin_id": "redot_compat_canary" if canary else manifest.plugin_id,
+                "mode": "canary"
+                if canary and phase is not PhaseName.IMPORT
+                else "import"
+                if phase is PhaseName.IMPORT
+                else "activate",
+                "session_key": key,
+                "probes": []
+                if canary
+                else [probe.model_dump(mode="json") for probe in manifest.probes],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    phase_environment = {**environment, "REDOT_COMPAT_HARNESS_JSON": str(config_path)}
+    try:
+        return run_host_phase(
+            [
+                str(binary),
+                "--headless",
+                "--audio-driver",
+                "Dummy",
+                "--path",
+                str(workspace.project),
+                *_PHASE_ARGUMENTS[phase],
+                "--quit-after",
+                "1800",
+            ],
+            phase_name=phase,
+            run_id=workspace.run_id,
+            working_directory=workspace.project,
+            environment=phase_environment,
+            log_directory=workspace.logs / phase.value,
+            timeout_seconds=_phase_timeout(phase, manifest, timeouts),
+            expect_harness_events=True,
+            engine_role=role,
+            session_key=key,
+        )
+    finally:
+        config_path.unlink(missing_ok=True)
+
+
 def _run_selected_phases(
     binary: Path,
     workspace: Workspace,
     environment: dict[str, str],
     manifest: PluginTestManifest,
     engine_role: EngineRole,
+    *,
+    phase_timeouts: PhaseTimeouts | None = None,
+    canary_phases: list[PhaseResult] | None = None,
+    retry_attempts: list[PhaseResult] | None = None,
 ) -> list[PhaseResult]:
+    timeouts = phase_timeouts or PhaseTimeouts()
     phases: list[PhaseResult] = []
     for phase_name in manifest.phases:
-        if phase_name is PhaseName.IMPORT:
-            phases.append(
-                run_host_phase(
-                    [
-                        str(binary),
-                        "--headless",
-                        "--editor",
-                        "--path",
-                        str(workspace.project),
-                        "--quit-after",
-                        "30",
-                    ],
-                    phase_name=phase_name,
-                    run_id=workspace.run_id,
-                    working_directory=workspace.project,
-                    environment=environment,
-                    log_directory=workspace.logs / "import",
-                    timeout_seconds=min(float(manifest.timeout_seconds), 180.0),
-                    expect_harness_events=False,
-                    engine_role=engine_role,
-                )
-            )
-        elif phase_name is PhaseName.EDITOR:
-            _enable_editor_harness(workspace.project)
-            phases.append(
-                run_host_phase(
-                    [
-                        str(binary),
-                        "--headless",
-                        "--editor",
-                        "--path",
-                        str(workspace.project),
-                        "--quit-after",
-                        "300",
-                    ],
-                    phase_name=phase_name,
-                    run_id=workspace.run_id,
-                    working_directory=workspace.project,
-                    environment=environment,
-                    log_directory=workspace.logs / "editor",
-                    timeout_seconds=float(manifest.timeout_seconds),
-                    expect_harness_events=True,
-                    engine_role=engine_role,
-                )
-            )
-        elif phase_name is PhaseName.RUNTIME:
-            phases.append(
-                run_host_phase(
-                    [
-                        str(binary),
-                        "--headless",
-                        "--path",
-                        str(workspace.project),
-                        "--script",
-                        "runtime_probe.gd",
-                        "--quit-after",
-                        "300",
-                    ],
-                    phase_name=phase_name,
-                    run_id=workspace.run_id,
-                    working_directory=workspace.project,
-                    environment=environment,
-                    log_directory=workspace.logs / "runtime",
-                    timeout_seconds=float(manifest.timeout_seconds),
-                    expect_harness_events=True,
-                    engine_role=engine_role,
-                )
-            )
-        else:
+        if phase_name not in _PHASE_ARGUMENTS:
             phases.append(
                 PhaseResult(
                     phase_name=phase_name,
@@ -548,7 +720,248 @@ def _run_selected_phases(
                     ],
                 )
             )
+            continue
+        phase = _run_phase(
+            binary, workspace, environment, manifest, phase_name, engine_role, timeouts
+        )
+        if any(
+            finding.code in _SHUTDOWN_CRASH_CODES or finding.code.startswith("UNREVIEWED_")
+            for finding in phase.findings
+        ):
+            canaries = _run_canaries(binary, workspace, manifest, phase, timeouts)
+            if canary_phases is not None:
+                canary_phases.extend(canaries)
+            reviewed = _review_engine_baseline(phase, canaries)
+            if _retryable_shutdown_crash(phase) and reviewed.status is PhaseStatus.CRASH:
+                phase, attempts = _retry_shutdown_phase(
+                    binary, workspace, manifest, phase, timeouts
+                )
+                if retry_attempts is not None:
+                    retry_attempts.extend(attempts)
+            else:
+                phase = reviewed
+        phases.append(phase)
     return phases
+
+
+def _authenticated_terminal(phase: PhaseResult) -> bool:
+    return (
+        not phase.timed_out
+        and bool(phase.sentinel_events)
+        and phase.sentinel_events[-1].event in {"pass", "fail"}
+        and not any(
+            finding.severity is FindingSeverity.CRITICAL
+            or finding.code
+            in {
+                "LOG_TRUNCATED",
+                "HARNESS_EVENT_UNAUTHENTICATED",
+                "HARNESS_PROTOCOL_ERROR",
+                "HARNESS_CONFIGURATION_ERROR",
+                "HARNESS_INCOMPLETE",
+            }
+            for finding in phase.findings
+        )
+    )
+
+
+def _terminal_status(phase: PhaseResult) -> PhaseStatus:
+    return (
+        PhaseStatus.FAIL
+        if phase.sentinel_events[-1].event == "fail"
+        or any(
+            finding.severity in {FindingSeverity.ERROR, FindingSeverity.CRITICAL}
+            for finding in phase.findings
+        )
+        else PhaseStatus.PASS
+    )
+
+
+def _retryable_shutdown_crash(phase: PhaseResult) -> bool:
+    return (
+        phase.status is PhaseStatus.CRASH
+        and _authenticated_terminal(phase)
+        and any(f.code in _SHUTDOWN_CRASH_CODES for f in phase.findings)
+    )
+
+
+def _retry_shutdown_phase(
+    binary: Path,
+    workspace: Workspace,
+    manifest: PluginTestManifest,
+    phase: PhaseResult,
+    timeouts: PhaseTimeouts,
+) -> tuple[PhaseResult, list[PhaseResult]]:
+    attempts = [phase]
+    for _attempt in range(2):
+        retry_workspace, environment = _prepare_engine_run(
+            workspace.root / "retries" / phase.phase_name.value,
+            workspace.source,
+            f"addons/{manifest.plugin_id}",
+        )
+        retry = _run_phase(
+            binary,
+            retry_workspace,
+            environment,
+            manifest,
+            phase.phase_name,
+            phase.engine_role,
+            timeouts,
+        )
+        attempts.append(retry)
+        if (
+            _authenticated_terminal(retry)
+            and retry.status in {PhaseStatus.PASS, PhaseStatus.FAIL}
+            and retry.exit_code is not None
+            and 0 <= retry.exit_code < 0xC0000000
+            and (
+                retry.status is PhaseStatus.FAIL
+                or (retry.exit_code == 0 and _terminal_status(retry) is PhaseStatus.PASS)
+            )
+        ):
+            warning = Finding(
+                code="ENGINE_INTERMITTENT_SHUTDOWN_CRASH",
+                severity=FindingSeverity.WARNING,
+                category=FindingCategory.ENGINE,
+                message=(
+                    "An intermittent post-terminal shutdown crash was not reproducible on a "
+                    "non-crashing same-phase retry; canaries did not reproduce it. "
+                    "The retry's completed phase evidence determines the result."
+                ),
+                phase=phase.phase_name,
+                engine_role=phase.engine_role,
+            )
+            return retry.model_copy(update={"findings": [*retry.findings, warning]}), attempts
+        if not _retryable_shutdown_crash(retry):
+            # A new failure must remain decisive, including tampering or truncated evidence.
+            return phase.model_copy(
+                update={"findings": [*phase.findings, *retry.findings]}
+            ), attempts
+    findings = list(phase.findings)
+    for attempt in attempts[1:]:
+        findings.extend(finding for finding in attempt.findings if finding not in findings)
+    findings.append(
+        Finding(
+            code="ENGINE_SHUTDOWN_CRASH_RETRY_EXHAUSTED",
+            severity=FindingSeverity.WARNING,
+            category=FindingCategory.ENGINE,
+            message=(
+                "All three attempts crashed after authenticated completion. Pre-crash "
+                "evidence determines the phase result; shutdown stability remains unverified."
+            ),
+            phase=phase.phase_name,
+            engine_role=phase.engine_role,
+        )
+    )
+    status = (
+        PhaseStatus.FAIL
+        if any(_terminal_status(attempt) is PhaseStatus.FAIL for attempt in attempts)
+        else PhaseStatus.PASS
+    )
+    return phase.model_copy(update={"status": status, "findings": findings}), attempts
+
+
+def _run_canaries(
+    binary: Path,
+    workspace: Workspace,
+    manifest: PluginTestManifest,
+    phase: PhaseResult,
+    timeouts: PhaseTimeouts,
+) -> list[PhaseResult]:
+    canaries: list[PhaseResult] = []
+    needs_crash = any(item.code in _SHUTDOWN_CRASH_CODES for item in phase.findings)
+    for _attempt in range(3 if needs_crash else 1):
+        canary = create_workspace(workspace.root / "canaries" / phase.phase_name.value)
+        shutil.copytree(_BASE_HARNESS, canary.project, dirs_exist_ok=True)
+        result = _run_phase(
+            binary,
+            canary,
+            build_isolated_environment(canary.state),
+            manifest,
+            phase.phase_name,
+            phase.engine_role,
+            timeouts,
+            canary=True,
+        )
+        canaries.append(result)
+        if any(item.code in _SHUTDOWN_CRASH_CODES for item in result.findings):
+            break
+    return canaries
+
+
+def _normalize_diagnostic(text: str) -> str:
+    text = strip_ansi(text)
+    text = re.sub(r"run-[a-fA-F0-9-]{32,36}", "<run>", text)
+    text = re.sub(r"[a-fA-F0-9]{32,64}", "<id>", text)
+    text = re.sub(r"(?:[A-Za-z]:[\\/]|(?:res|user)://|/)[^\s\"'<>]+", "<path>", text)
+    return re.sub(r"\d+", "#", text).strip()
+
+
+def _review_engine_baseline(phase: PhaseResult, canaries: list[PhaseResult]) -> PhaseResult:
+    valid = [
+        item
+        for item in canaries
+        if item.sentinel_events
+        and item.sentinel_events[-1].event == "pass"
+        and not any(
+            finding.code
+            in {
+                "HARNESS_EVENT_UNAUTHENTICATED",
+                "HARNESS_PROTOCOL_ERROR",
+                "LOG_TRUNCATED",
+            }
+            for finding in item.findings
+        )
+    ]
+    diagnostics = {
+        _normalize_diagnostic(finding.raw_log_excerpt or finding.message)
+        for item in valid
+        for finding in item.findings
+        if finding.code.startswith("UNREVIEWED_")
+    }
+    baseline_crash = any(
+        finding.code == "ENGINE_SHUTDOWN_CRASH_AFTER_PASS"
+        for item in valid
+        for finding in item.findings
+    )
+    findings: list[Finding] = []
+    for finding in phase.findings:
+        if (
+            finding.code.startswith("UNREVIEWED_")
+            and _normalize_diagnostic(finding.raw_log_excerpt or finding.message) in diagnostics
+        ):
+            finding = finding.model_copy(
+                update={
+                    "code": "ENGINE_BASELINE_DIAGNOSTIC",
+                    "severity": FindingSeverity.INFO,
+                    "message": "The same diagnostic was reproduced without the selected plugin.",
+                }
+            )
+        elif finding.code in _SHUTDOWN_CRASH_CODES and baseline_crash:
+            finding = finding.model_copy(
+                update={
+                    "code": "ENGINE_BASELINE_SHUTDOWN_CRASH",
+                    "severity": FindingSeverity.WARNING,
+                    "message": "The no-op harness reproduced the shutdown crash after completion.",
+                }
+            )
+        findings.append(finding)
+    status = phase.status
+    has_error = any(
+        item.severity in {FindingSeverity.ERROR, FindingSeverity.CRITICAL} for item in findings
+    )
+    if (
+        status in {PhaseStatus.FAIL, PhaseStatus.CRASH}
+        and phase.sentinel_events
+        and phase.sentinel_events[-1].event in {"pass", "fail"}
+    ):
+        if status is PhaseStatus.CRASH:
+            if baseline_crash and any(
+                item.code in _SHUTDOWN_CRASH_CODES for item in phase.findings
+            ):
+                status = _terminal_status(phase.model_copy(update={"findings": findings}))
+        elif phase.exit_code == 0 and not has_error and phase.sentinel_events[-1].event == "pass":
+            status = PhaseStatus.PASS
+    return phase.model_copy(update={"findings": findings, "status": status})
 
 
 def _missing_backend_result(
@@ -587,6 +1000,3 @@ def _missing_backend_result(
         limitations=[*static_result.limitations, selection.reason],
         reproduction=static_result.reproduction,
     )
-
-
-test_source.__test__ = False  # type: ignore[attr-defined]

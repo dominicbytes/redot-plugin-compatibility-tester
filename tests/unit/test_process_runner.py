@@ -126,3 +126,122 @@ def _wait_until_gone(pids: list[int], *, timeout_seconds: float = 5) -> bool:
             return True
         time.sleep(0.05)
     return not any(psutil.pid_exists(pid) for pid in pids)
+
+
+def test_process_runner_redacts_secrets_across_read_chunks(tmp_path: Path) -> None:
+    secret = "split-secret-value"  # noqa: S105 - synthetic redaction fixture
+    code = (
+        "import os, sys; "
+        "text = 'x' * 4093 + os.environ['TEST_TOKEN'] + '?' * 4096; "
+        "sys.stdout.write(text); sys.stderr.write(text)"
+    )
+    result = run_process(
+        [sys.executable, "-c", code],
+        working_directory=tmp_path,
+        environment={"TEST_TOKEN": secret},
+        output_directory=tmp_path / "split-secret-logs",
+        timeout_seconds=5,
+    )
+    for path in (result.stdout_path, result.stderr_path, result.combined_log_path):
+        text = Path(path).read_text(encoding="utf-8")
+        assert secret not in text
+        assert "<redacted>" in text
+        assert "\ufffd" not in text
+    assert not result.stdout_truncated
+    assert not result.stderr_truncated
+    assert not result.combined_truncated
+
+
+def test_process_runner_exposes_stderr_and_combined_truncation(tmp_path: Path) -> None:
+    result = run_process(
+        [sys.executable, "-c", "import sys; sys.stderr.write('x' * 10000)"],
+        working_directory=tmp_path,
+        environment={},
+        output_directory=tmp_path / "stderr-truncated",
+        timeout_seconds=5,
+        max_log_bytes=512,
+    )
+    assert not result.stdout_truncated
+    assert result.stderr_truncated
+    assert result.combined_truncated
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group teardown")
+@pytest.mark.parametrize("timeout", [False, True])
+def test_posix_group_kills_reparented_sigterm_resistant_grandchild(
+    tmp_path: Path, timeout: bool
+) -> None:
+    pid_path = tmp_path / "orphan-pid.txt"
+    grandchild = (
+        "import os, signal, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"open({str(pid_path)!r}, 'w').write(str(os.getpid())); "
+        "time.sleep(30)"
+    )
+    child = (
+        "import pathlib, subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild!r}]); "
+        f"path = pathlib.Path({str(pid_path)!r}); "
+        "exec('while not path.exists(): time.sleep(0.01)')"
+    )
+    root = (
+        "import subprocess, sys, time; "
+        f"subprocess.run([sys.executable, '-c', {child!r}], check=True); "
+        + ("time.sleep(30)" if timeout else "pass")
+    )
+    try:
+        result = run_process(
+            [sys.executable, "-c", root],
+            working_directory=tmp_path,
+            environment={},
+            output_directory=tmp_path / "posix-logs",
+            timeout_seconds=2 if timeout else 5,
+        )
+        assert result.timed_out is timeout
+        if not timeout:
+            assert result.exit_code == 0
+        pid = int(pid_path.read_text())
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("SIGTERM-resistant orphan survived process-group teardown")
+    finally:
+        if pid_path.exists():
+            try:
+                psutil.Process(int(pid_path.read_text())).kill()
+            except psutil.Error:
+                pass
+
+
+def test_process_runner_retains_short_output_before_process_exit(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    ack = tmp_path / "ack"
+    code = (
+        "import pathlib, time; print('ready', flush=True); "
+        f"ack = pathlib.Path({str(ack)!r}); "
+        "exec('while not ack.exists(): time.sleep(0.01)')"
+    )
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            run_process,
+            [sys.executable, "-c", code],
+            working_directory=tmp_path,
+            environment={},
+            output_directory=tmp_path / "live",
+            timeout_seconds=5,
+        )
+        retained = tmp_path / "live/stdout.log"
+        deadline = time.monotonic() + 2
+        observed = False
+        while time.monotonic() < deadline and not future.done():
+            if retained.exists() and "ready" in retained.read_text():
+                observed = True
+                break
+            time.sleep(0.01)
+        ack.touch()
+        assert future.result(timeout=6).exit_code == 0
+    assert observed, "short pipe output was buffered until engine exit"
